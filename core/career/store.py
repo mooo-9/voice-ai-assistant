@@ -19,9 +19,6 @@ DEFAULTS = {
     "min_score": 60,
     # LinkedIn restricts accounts that apply at machine pace.
     "linkedin_daily_cap": 20,
-    # A firm's hiring system keeps every application; a wave of them to one
-    # Big 4 firm reads as spray, and rejections can bar re-applying for months.
-    "big4_per_firm_per_month": 3,
     # People at target companies found and drafted a note for, per night.
     "referrals_per_day": 5,
     "search_terms": [

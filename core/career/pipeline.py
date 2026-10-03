@@ -15,10 +15,6 @@ _busy = threading.Lock()
 # Seconds between browser applications: a person's pace, not a bot's.
 _BROWSER_PAUSE = (45, 120)
 
-# Statuses that count as "applied to this firm" for the Big 4 cap.
-_COUNTS_AS_APPLIED = ("ready", "approved", "practice", "applied", "needs_you",
-                      "interview", "rejected", "replied")
-
 # Titles in Mo's field: AI, data analyst and business analyst roles (SAP/ERP
 # titles come in through profile.is_erp). "Analyst"
 # or "graduate" alone isn't: the first practice run spent 17 of 40 slots on
@@ -145,10 +141,9 @@ def prepare_batch() -> str:
 
     candidates = sorted(waiting + scored,
                         key=lambda a: (companies.TIER_RANK[a["tier"]], -a["score"]))
-    firm_counts = _big4_counts_this_month()
     picked, skipped = [], passed_over
     for app in candidates:
-        reason = _skip_reason(app, s, firm_counts)
+        reason = _skip_reason(app, s)
         if reason:
             _record(app, "skipped", reason)
             skipped += 1
@@ -156,8 +151,6 @@ def prepare_batch() -> str:
             _record(app, "waiting", "over today's target")
         else:
             picked.append(app)
-            if app["tier"] == "big4":
-                firm_counts[app["company_key"]] = firm_counts.get(app["company_key"], 0) + 1
 
     drafted = list(zip(picked, tailor.draft_all(picked, ptext)))
     ready = 0
@@ -226,26 +219,14 @@ def _prepared(job: dict) -> dict:
     return app
 
 
-def _skip_reason(app: dict, s: dict, firm_counts: dict) -> str:
+def _skip_reason(app: dict, s: dict) -> str:
     if not app.get("in_egypt", True):
         return "not in Egypt"
     if app.get("level") in ("mid", "senior"):
         return f"{app['level']}-level role"
     if app["score"] < s["min_score"]:
         return f"score {app['score']} below {s['min_score']}"
-    if app["tier"] == "big4" and firm_counts.get(app["company_key"], 0) >= s["big4_per_firm_per_month"]:
-        return f"already {s['big4_per_firm_per_month']} applications to {app['company_key']} this month"
     return ""
-
-
-def _big4_counts_this_month() -> dict:
-    since = (datetime.now() - timedelta(days=30)).isoformat(timespec="seconds")
-    counts: dict = {}
-    for a in tracker.all_apps().values():
-        if a.get("tier") == "big4" and a.get("status") in _COUNTS_AS_APPLIED \
-                and a.get("found_at", "") >= since:
-            counts[a["company_key"]] = counts.get(a["company_key"], 0) + 1
-    return counts
 
 
 def evaluate_one(url: str) -> str:
@@ -275,7 +256,7 @@ def evaluate_one(url: str) -> str:
                      "company_key": target["name"] if target else fit["company"],
                      "description": text})
     app.update({k: fit[k] for k in ("score", "fit", "missing", "level", "in_egypt")})
-    reason = _skip_reason(app, store.settings(), _big4_counts_this_month())
+    reason = _skip_reason(app, store.settings())
     _record(app, "skipped" if reason else "waiting", reason or "Mo's link; fits")
     head = f"{app['title']} at {app['company']}: {app['score']}/100. {app['fit']}"
     lacks = f" They ask for what your CV doesn't show: {'; '.join(app['missing'])}." \

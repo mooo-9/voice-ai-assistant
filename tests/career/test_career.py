@@ -374,15 +374,15 @@ class TestPrepareBatch:
     def test_what_counts_as_mos_field(self, title, wanted):
         assert pipeline._in_field({"title": title}) is wanted
 
-    def test_big4_comes_first_and_is_capped_per_firm(self):
+    def test_big4_comes_first_with_no_cap_per_firm(self):
+        """Mo wants every Big 4 opening he fits, not three a month."""
         jobs = [_job(f"Graduate {i}", "PwC Middle East", f"https://pwc.x/{i}", score=70)
                 for i in range(5)]
         jobs.append(_job("Analyst", "Fawry", "https://wuzzuf.net/jobs/p/9", score=95))
         self._run(jobs)
         ready = pipeline.ready_batch()
-        assert [a["company_key"] for a in ready] == ["PwC"] * 3 + ["Fawry"]
-        capped = [a for a in tracker.with_status("skipped")]
-        assert len(capped) == 2 and "this month" in capped[0]["events"][-1]["note"]
+        assert [a["company_key"] for a in ready] == ["PwC"] * 5 + ["Fawry"]
+        assert tracker.with_status("skipped") == []
 
     def test_over_the_target_waits_for_tomorrow_without_rescoring(self):
         jobs = [_job(f"Analyst {i}", "Co", f"https://wuzzuf.net/jobs/p/{i}", score=90 - i)

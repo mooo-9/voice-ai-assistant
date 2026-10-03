@@ -149,9 +149,6 @@ Ledger.
 
 ## Guard rails
 
-- **Big 4 cap:** at most `big4_per_firm_per_month` (3) applications per firm per
-  30 days — their systems keep every application, and rejections can bar
-  re-applying for months.
 - **Only Mo approves:** `approve_applications` is refused in background turns,
   so a background run can prepare a batch but never send it.
 - **Nothing invented:** scores, letters and form answers use only the CV and the

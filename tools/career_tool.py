@@ -161,7 +161,6 @@ def interview_prep(company: str, role: str = "") -> str:
 def application_settings(live: "bool | None" = None,
                          daily_target: "int | None" = None, min_score: "int | None" = None,
                          linkedin_daily_cap: "int | None" = None,
-                         big4_per_firm_per_month: "int | None" = None,
                          referrals_per_day: "int | None" = None) -> str:
     from core.career import profile, store
     if live and not profile.has_cv():
@@ -169,13 +168,11 @@ def application_settings(live: "bool | None" = None,
     changes = {k: v for k, v in {
         "live": live, "daily_target": daily_target, "min_score": min_score,
         "linkedin_daily_cap": linkedin_daily_cap,
-        "big4_per_firm_per_month": big4_per_firm_per_month,
         "referrals_per_day": referrals_per_day}.items() if v is not None}
     s = store.update_settings(**changes)
     mode = "LIVE -- approved applications are sent" if s["live"] else "practice -- nothing is sent"
     return (f"Mode: {mode}. Daily target {s['daily_target']}, minimum score "
-            f"{s['min_score']}, LinkedIn cap {s['linkedin_daily_cap']}/day, "
-            f"Big 4 cap {s['big4_per_firm_per_month']} per firm per month.")
+            f"{s['min_score']}, LinkedIn cap {s['linkedin_daily_cap']}/day.")
 
 
 def graduate_programmes(check: bool = False) -> str:

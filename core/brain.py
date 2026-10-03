@@ -4530,7 +4530,7 @@ TOOLS: list[dict[str, Any]] = [
             "Show or change the job-application settings; with no input it shows them. "
             "live=true sends approved applications for real (needs his CV imported), "
             "live=false is practice mode. daily_target, min_score (0-100), linkedin_daily_cap and "
-            "big4_per_firm_per_month and referrals_per_day are numbers. Change only what "
+            "referrals_per_day are numbers. Change only what "
             "Mo asked to change."
         ),
         "input_schema": {
@@ -4540,7 +4540,6 @@ TOOLS: list[dict[str, Any]] = [
                 "daily_target": {"type": "integer"},
                 "min_score": {"type": "integer"},
                 "linkedin_daily_cap": {"type": "integer"},
-                "big4_per_firm_per_month": {"type": "integer"},
                 "referrals_per_day": {"type": "integer"}
             }
         }
