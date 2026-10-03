@@ -75,9 +75,11 @@ def is_erp(job: dict) -> bool:
 
 def for_job(profile: dict, job: dict) -> dict:
     """The profile an application to `job` is written and sent from: the ERP
-    CV's for an ERP role once it's imported, the main one otherwise."""
+    CV's for an ERP role once it's imported, the main one otherwise. A CV
+    tailored to this one job (made with Mo in Claude Code) is the file sent."""
     erp = profile.get("erp") or {}
-    return {**profile, **erp} if erp.get("cv_path") and is_erp(job) else profile
+    chosen = {**profile, **erp} if erp.get("cv_path") and is_erp(job) else profile
+    return {**chosen, "cv_path": job["cv_path"]} if job.get("cv_path") else chosen
 
 
 def import_cv(path: str, erp: bool = False) -> str:

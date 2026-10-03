@@ -130,6 +130,14 @@ class TestProfile:
             assert chosen["cv_path"] == str(cv), title
             assert f"Skills: {skill}" in profile.as_text(chosen), title
 
+    def test_a_cv_tailored_to_the_job_is_the_one_sent(self):
+        p = {"cv_path": "main.pdf", "erp": {"cv_path": "erp.pdf"}}
+        for title, tailored, sent in [("Data Analyst", "amazon.pdf", "amazon.pdf"),
+                                      ("SAP Consultant", "sap.pdf", "sap.pdf"),
+                                      ("Data Analyst", "", "main.pdf")]:
+            job = {"title": title, "cv_path": tailored}
+            assert profile.for_job(p, job)["cv_path"] == sent, title
+
     def test_an_unreadable_cv_is_reported(self, tmp_path):
         cv = tmp_path / "cv.pdf"
         cv.write_bytes(b"%PDF")

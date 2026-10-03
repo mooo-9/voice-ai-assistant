@@ -3,6 +3,8 @@ none ticked. Mo ticks the ones to send and presses Send; the rest stay saved
 here, letters and all, for him to send another day.
 Served by the dashboard at /jobs; the batch itself comes from /api/jobs with
 the dashboard token, so the drafts aren't readable without it."""
+from pathlib import Path
+
 from core.career import companies, pipeline, profile, programmes, referrals, store
 
 
@@ -18,6 +20,7 @@ def batch_json() -> dict:
             "missing": a.get("missing", []), "channel": a["channel"], "url": a["url"],
             "location": a.get("location", ""), "to": a.get("hr_email", ""),
             "subject": a["draft"]["subject"], "body": a["draft"]["body"],
+            "cv": Path(a["cv_path"]).name if a.get("cv_path") else "",
             "drafted": next((e["at"][:10] for e in reversed(a.get("events", []))
                              if e["status"] == "ready"), ""),
         } for a in pipeline.ready_batch()],
@@ -132,7 +135,7 @@ function render(){
   <input type="checkbox" ${a.on?'checked':''} onchange="flip('${a.id}',this.checked)">
   <div class="main">
    <div class="t"><a href="${esc(a.url)}" target="_blank" rel="noopener">${esc(a.title)}</a>${a.tier==='big4'?'<span class="badge">Big 4</span>':a.tier==='top'?'<span class="badge">Top</span>':''}</div>
-   <div class="meta">${esc(a.company)}${a.location?' · '+esc(a.location):''} · <span class="score">${a.score}</span>/100 · ${esc(CH[a.channel]||a.channel)}${a.to?' → '+esc(a.to):''}${a.drafted?' · drafted '+esc(a.drafted):''}</div>
+   <div class="meta">${esc(a.company)}${a.location?' · '+esc(a.location):''} · <span class="score">${a.score}</span>/100 · ${esc(CH[a.channel]||a.channel)}${a.to?' → '+esc(a.to):''}${a.drafted?' · drafted '+esc(a.drafted):''}${a.cv?' · CV: '+esc(a.cv):''}</div>
    <div class="fit">${esc(a.fit)}</div>
    ${a.missing.length?`<div class="gap">They ask for: ${esc(a.missing.join('; '))}</div>`:''}
    <details><summary>Read the ${a.channel==='email'?'email':'cover letter'}</summary><pre>${esc(a.subject)}\n\n${esc(a.body)}</pre></details>

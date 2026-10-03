@@ -104,6 +104,27 @@ in the saved ones), tracking, referral drafting, the job sources.
   skipped before scoring (`core/career/liveness.py`, career-ops' patterns), so
   no Claude call is spent on a job that can't be applied to.
 
+## A CV tailored to one job (made with Mo in Claude Code)
+
+For the jobs worth a real shot, Mo opens Claude Code in this repo and says
+"tailor my CV for <company>". It runs on his subscription, so it costs the API
+budget nothing.
+
+1. Read the posting (`description` in `data/career/applications.json`) and
+   Mo's master CV, `Downloads\Mohab Mohamed Fawzy CV (AI-Data-BA).docx` (the
+   ERP one for ERP roles).
+2. Copy the .docx with python-docx: reorder skills and projects so what the
+   posting asks for comes first, reword bullets in its terms. Only facts the
+   CV already states; keep it to one page. Same for a letter if wanted.
+3. Save it as PDF through Word (`win32com`, `SaveAs(..., FileFormat=17)`) as
+   `Downloads\Mohab Mohamed Fawzy CV (<Company> <Role>).pdf`. Mo reads it.
+4. Attach it to the application:
+   `tracker.update(app_id, cv_path=r"<pdf>", draft={**app["draft"], "body": letter})`.
+
+That file is then the one sent (`profile.for_job` prefers the application's
+own `cv_path` to the main or ERP CV), and the review page shows "CV: <file>"
+next to the job so Mo sees which one goes before he presses Send.
+
 ## How applications go out
 
 | Channel  | When                              | What happens |
