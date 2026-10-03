@@ -1,5 +1,5 @@
-"""Where the pipeline finds jobs: every search term on LinkedIn, the Big 4
-and Mo's other picks by name on LinkedIn, and every target company's own
+"""Where the pipeline finds jobs: every search term on Wuzzuf and LinkedIn,
+the Big 4 and Mo's other picks by name on both, and every target company's own
 career site that can be read."""
 import re
 import urllib.parse

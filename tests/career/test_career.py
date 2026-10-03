@@ -765,14 +765,14 @@ class TestSources:
             jobs = sources.gather({"search_terms": ["credit risk"]})
         assert [j["company"] for j in jobs] == ["Tamweely"]
 
-    def test_only_linkedin_is_searched_among_the_boards(self, monkeypatch):
-        """Mo dropped Wuzzuf, Bayt and Forasna from the job hunt."""
+    def test_wuzzuf_and_linkedin_are_the_boards_searched(self, monkeypatch):
+        """Mo dropped Bayt and Forasna; he has a Wuzzuf account."""
         monkeypatch.setattr(companies, "with_career_sites", lambda: [])
         asked = []
         with patch("core.agents.job_search_agent.JobSearchAgent._from_source",
                    lambda self, src, term: asked.append(src) or []):
             sources.gather({"search_terms": ["data analyst", "business analyst"]})
-        assert asked and set(asked) == {"LinkedIn"}
+        assert set(asked) == {"Wuzzuf", "LinkedIn"}
 
     def test_no_bank_is_a_target(self):
         names = {c["name"] for c in companies.all_companies()}

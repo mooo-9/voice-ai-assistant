@@ -3,7 +3,7 @@ from unittest.mock import patch
 import pytest
 
 from core.agents import job_search_agent as jsa
-from core.agents.job_search_agent import JobSearchAgent, _parse_linkedin
+from core.agents.job_search_agent import JobSearchAgent, _parse_linkedin, _parse_wuzzuf
 
 
 @pytest.fixture(autouse=True)
@@ -35,6 +35,20 @@ LINKEDIN_HTML = """
 TWO_HTML = LINKEDIN_HTML.replace("Senior Data Analyst", "Business Analyst").replace(
     "<a>CIB</a>", "<a>Noon Academy</a>")
 
+
+
+WUZZUF_HTML = """
+<div class="css-1gatmva"><div class="css-pkv5jc"><div class="css-laomuu">
+  <h2 class="css-m604qf"><a class="css-o171kl" href="/jobs/p/abc123-Business-Analyst-Noon-Academy-Cairo-Egypt">Business Analyst</a></h2>
+  <div class="css-d7j1kk"><a class="css-17s97q8" href="https://wuzzuf.net/jobs/careers/Noon-Academy-Egypt-1">Noon Academy -</a><span class="css-5wys0k">Maadi, Cairo, Egypt</span></div>
+  <div><div class="css-4c4ojb">3 days ago</div></div>
+</div></div></div>
+<div class="css-1gatmva"><div class="css-pkv5jc"><div class="css-laomuu">
+  <h2 class="css-m604qf"><a href="https://wuzzuf.net/internship/xyz789-Data-Analyst-Intern-TMentors-Cairo-Egypt">Data Analyst Intern</a></h2>
+  <div class="css-d7j1kk"><a href="/jobs/careers/TMentors-Egypt-2">TMentors -</a><span>Cairo, Egypt</span></div>
+  <div><div class="css-do6t5g">1 day ago</div></div>
+</div></div></div>
+"""
 
 
 class TestParseLinkedIn:
@@ -70,11 +84,25 @@ def _agent(pages: dict, searches: dict | None = None, rendered: str = ""):
     def fetch(url):
         if "linkedin" in url:
             return pages.get("LinkedIn", "")
+        if "wuzzuf" in url:
+            return pages.get("Wuzzuf", "")
         raise AssertionError(f"unexpected direct read: {url}")
 
     agent._fetch = fetch
     agent._web_search = lambda source, role: searches.get(source, [])
     return agent
+
+
+class TestParseWuzzuf:
+    def test_finds_cards_by_their_links_not_class_names(self):
+        jobs = _parse_wuzzuf(WUZZUF_HTML)
+        assert jobs[0] == {
+            "title": "Business Analyst", "company": "Noon Academy",
+            "location": "Maadi, Cairo, Egypt", "posted": "3 days ago",
+            "url": "https://wuzzuf.net/jobs/p/abc123-Business-Analyst-Noon-Academy-Cairo-Egypt",
+            "source": "Wuzzuf",
+        }
+        assert jobs[1]["url"] == "https://wuzzuf.net/internship/xyz789-Data-Analyst-Intern-TMentors-Cairo-Egypt"
 
 
 class TestRun:
@@ -84,13 +112,31 @@ class TestRun:
         assert "Data Analyst Intern -- Vodafone Egypt, Cairo, Egypt [LinkedIn, 2 days ago]" in out
         assert "https://eg.linkedin.com/jobs/view/senior-data-analyst-at-cib-222" in out
 
-    def test_wuzzuf_bayt_and_forasna_are_never_searched(self):
-        """Mo dropped them: LinkedIn and company sites only."""
+    def test_bayt_and_forasna_are_never_searched(self):
+        """Mo dropped them; he has a Wuzzuf account, so Wuzzuf stays."""
         agent = _agent({})
         searched = []
         agent._web_search = lambda source, role: searched.append(source) or []
         agent.run("")
-        assert set(searched) == {"LinkedIn"} and agent.renders == []
+        assert set(searched) == {"Wuzzuf", "LinkedIn"}
+
+    def test_lists_wuzzuf_jobs_beside_linkedin(self):
+        out = _agent({"Wuzzuf": WUZZUF_HTML, "LinkedIn": LINKEDIN_HTML}).run("data analyst")
+        assert out.startswith("3 new jobs for data analyst (Wuzzuf 2, LinkedIn 1):")
+        assert "https://wuzzuf.net/jobs/p/abc123-Business-Analyst-Noon-Academy-Cairo-Egypt" in out
+
+    def test_wuzzuf_behind_cloudflare_is_read_in_a_browser(self):
+        """Wuzzuf answers a plain read with Cloudflare's "Just a moment..."
+        page; headless Chromium waits it out."""
+        agent = _agent({"Wuzzuf": "<title>Just a moment...</title>"}, rendered=WUZZUF_HTML)
+        out = agent.run("business analyst")
+        assert "Business Analyst -- Noon Academy, Maadi, Cairo, Egypt [Wuzzuf" in out
+        assert len(agent.renders) == 1 and "wuzzuf.net" in agent.renders[0]
+
+    def test_a_wuzzuf_page_read_plainly_needs_no_browser(self):
+        agent = _agent({"Wuzzuf": WUZZUF_HTML, "LinkedIn": LINKEDIN_HTML})
+        agent.run("data analyst")
+        assert agent.renders == []
 
     def test_linkedin_is_read_past_its_first_ten(self):
         """The first page alone left 35 of a week's 45 data analyst postings unread."""

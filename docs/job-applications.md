@@ -7,8 +7,9 @@ Code: `core/career/`, `core/agents/job_search_agent.py`, `tools/career_tool.py`.
 ```
  job hunt (armed for 02:00)                   morning                     day
  check replies → gather → score → draft  ──►  review page /jobs  ──►  send (paced)
- (Gmail)         (LinkedIn,(Claude,  (Claude)  Mo ticks, sends        email ·
-                  company   min 60)                                   LinkedIn · site form
+ (Gmail)         (Wuzzuf,  (Claude,  (Claude)  Mo ticks, sends        email · Wuzzuf ·
+                  LinkedIn, min 60)                                   LinkedIn · site form
+                  company
                   sites)
 ```
 
@@ -88,14 +89,15 @@ in the saved ones), tracking, referral drafting, the job sources.
 
 ## Where jobs come from
 
-- Every search term (`search_terms` in `store.DEFAULTS`) on LinkedIn
-  (`SOURCES` in `job_search_agent.py`). Wuzzuf, Bayt and Forasna are skipped,
-  in the job hunt and in "find me jobs" alike.
-- The Big 4 by name on LinkedIn, plus their own sites: Deloitte's
+- Every search term (`search_terms` in `store.DEFAULTS`) on Wuzzuf and LinkedIn
+  (`SOURCES` in `job_search_agent.py`); Wuzzuf is read in headless Chromium
+  past Cloudflare. Bayt and Forasna are skipped, in the job hunt and in
+  "find me jobs" alike. Wuzzuf applications go through Mo's signed-in account.
+- The Big 4 by name on Wuzzuf and LinkedIn, plus their own sites: Deloitte's
   Middle East careers site, PwC's Workday, EY's student and careers sites.
 - Mo's other picks, treated like the Big 4 (`"opus": true` in `companies.json`):
   IBM, Accenture, Schneider Electric, P&G, Siemens, Microsoft and Nestlé —
-  searched by name on LinkedIn and on their own career sites.
+  searched by name on Wuzzuf and LinkedIn and on their own career sites.
 - Target companies (`core/career/companies.json`) go first in the review: Big 4,
   then top employers in Egypt. Add a company there with its aliases.
 - Closed postings ("No longer accepting applications", filled, expired, 404) are

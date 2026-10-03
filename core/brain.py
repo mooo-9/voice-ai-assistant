@@ -4405,10 +4405,10 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "job_search_agent",
         "description": (
-            "Job search agent -- finds internships and entry-level jobs in Egypt on LinkedIn "
-            "and returns a ranked list with links. Mo dropped Wuzzuf, Bayt and Forasna: "
-            "LinkedIn and company sites only. Use for: 'find me jobs', 'any new "
-            "internships?', 'data analyst jobs in Cairo'. query is the role Mo named ('data analyst internship'); omit it when he "
+            "Job search agent -- finds internships and entry-level jobs in Egypt on Wuzzuf "
+            "and LinkedIn and returns a ranked list with links. Mo dropped Bayt and Forasna. "
+            "Use for: 'find me jobs', 'any new internships?', 'data analyst jobs in Cairo', "
+            "'what's on Wuzzuf'. query is the role Mo named ('data analyst internship'); omit it when he "
             "names none and it searches all his target roles. It lists only jobs not shown "
             "before; show_all=true lists them again. It only reads postings and never "
             "applies: relay the list to Mo."

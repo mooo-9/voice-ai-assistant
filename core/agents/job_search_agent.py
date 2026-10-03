@@ -1,9 +1,10 @@
 """
 JobSearchAgent -- finds internships and entry-level jobs in Egypt for Mo.
 
-Reads LinkedIn's logged-out job listing directly, and a web search limited to
-LinkedIn when that blocks reading. Mo dropped Wuzzuf, Bayt and Forasna: LinkedIn
-and the companies' own sites are where he looks. It only reads postings: it never
+Reads Wuzzuf's search page and LinkedIn's logged-out job listing directly;
+Wuzzuf, which puts Cloudflare's check in front of a plain read, in a headless
+browser. Either one comes through a web search limited to that site when it
+blocks reading. Mo dropped Bayt and Forasna. It only reads postings: it never
 applies. Every job it shows is remembered in data/jobs_seen.json, so the same
 posting never comes back as new.
 """
@@ -23,11 +24,13 @@ _FILE = Path(__file__).parent.parent.parent / "data" / "jobs_seen.json"
 TARGET_ROLES = ["data analyst", "business analyst", "business intelligence", "machine learning",
                 "AI engineer", "SAP", "ERP"]
 
-SOURCES = ["LinkedIn"]
+SOURCES = ["Wuzzuf", "LinkedIn"]
 
 _MAX_SHOWN = 15
 _TIMEOUT = 10
 _RENDER_TIMEOUT_MS = 20000
+
+_WUZZUF_URL = "https://wuzzuf.net/search/jobs/?q={q}&a=hpb"
 
 # The listing LinkedIn's own logged-out jobs page loads. f_E=1,2 is internship
 # and entry level; f_TPR=r604800 is the past week.
@@ -42,6 +45,7 @@ _LINKEDIN_PAGES = 3
 # ("Data Analyst Jobs in Cairo") come back from the same searches and are
 # dropped by the path.
 _SEARCH_SITES = {
+    "Wuzzuf": ("wuzzuf.net", re.compile(r"wuzzuf\.net/(jobs/p|internship)/")),
     "LinkedIn": ("linkedin.com/jobs", re.compile(r"linkedin\.com/jobs/view/")),
 }
 
@@ -65,7 +69,7 @@ class JobSearchAgent(BaseAgent):
 
     @property
     def description(self) -> str:
-        return "Finds internships and entry-level jobs in Egypt on LinkedIn."
+        return "Finds internships and entry-level jobs in Egypt on Wuzzuf and LinkedIn."
 
     def run(self, task: str = "", show_all: bool = False) -> str:
         roles = [task.strip()] if task.strip() else TARGET_ROLES
@@ -99,6 +103,14 @@ class JobSearchAgent(BaseAgent):
     def _from_source(self, source: str, role: str) -> "list[dict] | None":
         """Jobs for one role from one board, or None when it couldn't be read
         at all. A board read directly falls back to the web search."""
+        if source == "Wuzzuf":
+            url = _WUZZUF_URL.format(q=urllib.parse.quote(role))
+            html = self._fetch(url)
+            jobs = _parse_wuzzuf(html) if html else []
+            if not jobs:
+                html = self._render(url)
+                jobs = _parse_wuzzuf(html) if html else []
+            return jobs or self._web_search(source, role)
         direct = {"LinkedIn": (_LINKEDIN_URL, _parse_linkedin)}.get(source)
         if direct:
             url, parse = direct
@@ -183,6 +195,33 @@ def _parse_linkedin(html: str) -> list[dict]:
         jobs.append({
             "title": _text(title), "company": _text(company), "location": _text(location),
             "posted": _text(posted), "url": _canonical(link["href"]), "source": "LinkedIn",
+        })
+    return jobs
+
+
+def _parse_wuzzuf(html: str) -> list[dict]:
+    """Wuzzuf's class names are build hashes that change between releases, so
+    cards are found by their links: the title links to the job page, and the
+    company links to its careers page."""
+    from bs4 import BeautifulSoup
+    jobs = []
+    soup = BeautifulSoup(html, "html.parser")
+    for link in soup.select('h2 a[href*="/jobs/p/"], h2 a[href*="/internship/"]'):
+        card = link
+        for _ in range(4):
+            card = card.parent
+            if card is None or card.select_one('a[href*="/jobs/careers/"]'):
+                break
+        company = card.select_one('a[href*="/jobs/careers/"]') if card else None
+        location = company.find_next_sibling("span") if company else None
+        posted = card.find(string=re.compile(r"\bago\b")) if card else None
+        jobs.append({
+            "title": _text(link),
+            "company": _text(company).rstrip(" -"),
+            "location": _text(location),
+            "posted": posted.strip() if posted else "",
+            "url": _canonical(urllib.parse.urljoin("https://wuzzuf.net", link["href"])),
+            "source": "Wuzzuf",
         })
     return jobs
 
