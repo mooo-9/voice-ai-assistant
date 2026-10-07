@@ -24,5 +24,11 @@ jobs:
           python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
           python -m pip install -r requirements.txt pytest
 
+      # The runner's desktop is 1024x768; the window-placement tests assume a
+      # normal monitor, as the app does.
+      - name: Set a 1080p screen
+        shell: powershell
+        run: Set-DisplayResolution -Width 1920 -Height 1080 -Force
+
       - name: Run tests
         run: python -m pytest tests -q -p no:cacheprovider
