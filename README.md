@@ -1,5 +1,7 @@
 # Voice AI Assistant for Windows
 
+[![tests](https://github.com/mooo-9/voice-ai-assistant/actions/workflows/tests.yml/badge.svg)](https://github.com/mooo-9/voice-ai-assistant/actions/workflows/tests.yml)
+
 A personal voice assistant for Windows 11 that runs the PC for you. You call it with a custom wake phrase or a hotkey, speak naturally, and it plans the task, uses its tools and answers out loud.
 
 It is built in Python on the Claude API. It has 66 tools, long-term vector memory, its own speech pipeline, and an automated job-search pipeline. **2,400+ pytest tests** gate every change.
