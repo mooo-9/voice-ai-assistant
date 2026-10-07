@@ -4,6 +4,8 @@ A personal voice assistant for Windows 11 that runs the PC for you. You call it 
 
 It is built in Python on the Claude API. It has 66 tools, long-term vector memory, its own speech pipeline, and an automated job-search pipeline. **2,400+ pytest tests** gate every change.
 
+![The cockpit: calendar, the animated voice orb and one-tap automations](docs/images/cockpit.png)
+
 ---
 
 ## What it can do
