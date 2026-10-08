@@ -24,6 +24,12 @@ jobs:
           python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
           python -m pip install -r requirements.txt pytest
 
+      # openwakeword ships without its feature models and fetches them on
+      # first use, as core/wake_word.py does at startup. The wake-word
+      # training test builds AudioFeatures directly, so fetch them up front.
+      - name: Fetch the wake-word feature models
+        run: python -c "import openwakeword.utils as u; u.download_models()"
+
       # The runner's desktop is 1024x768; the window-placement tests assume a
       # normal monitor, as the app does.
       - name: Set a 1080p screen
