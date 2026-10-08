@@ -113,6 +113,11 @@ class TestTrainedTheWayItListens:
         pos = [c for c in (say("Hey Fager", r) for r in (130, 150, 170)) if c is not None]
         neg = [c for c in (say(t, 150) for t in ("What time is it", "Play some music",
                                                   "Hello there")) if c is not None]
+        # A CI runner lists voices but renders nothing through them: every
+        # clip comes back None, and fitting on no audio says only "need at
+        # least one array to concatenate". This test needs real speech.
+        if len(pos) < 2 or not neg:
+            pytest.skip("Windows text-to-speech rendered no audio")
         out = tmp_path / "candidate.onnx"
         train.fit_candidate([(pos * 2, 1, 1.0, "POS"), (neg * 2, 0, 1.0, "NEG")],
                             AudioFeatures(inference_framework="onnx"), str(out))
