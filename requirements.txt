@@ -95,3 +95,21 @@ pycaw>=20230710    # Windows system volume control
 
 # Phase 7A — Proactive Scheduler
 apscheduler>=3.10.0
+
+# Imported by the app and its tests but previously installed by hand, so a
+# fresh install (and CI) missed them. Floors are the versions in use.
+PyQt6-WebEngine>=6.11.0     # cockpit orb
+cryptography>=48.0.0        # encrypted vault and action ledger
+opencv-python-headless>=4.13.0
+ddgs>=9.14.4                # web search for the research and job agents
+playwright>=1.60.0          # browser agent
+PyAutoGUI>=0.9.54           # mouse and keyboard control
+PyGetWindow>=0.0.9
+pypdf>=6.12.2
+pyttsx3>=2.99               # wake-word training voices
+qrcode>=8.2
+reportlab>=5.0.0            # PDF generation
+scipy>=1.17.1
+scikit-learn>=1.9.0         # wake-word model training
+speedtest-cli>=2.1.3
+pywin32>=312
