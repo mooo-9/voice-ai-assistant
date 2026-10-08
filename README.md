@@ -1,8 +1,12 @@
 # Voice AI Assistant for Windows
 
+[![tests](https://github.com/mooo-9/voice-ai-assistant/actions/workflows/tests.yml/badge.svg)](https://github.com/mooo-9/voice-ai-assistant/actions/workflows/tests.yml)
+
 A personal voice assistant for Windows 11 that runs the PC for you. It starts when you launch it and lives in the system tray. You call it with a custom wake phrase or `Ctrl+F12`, speak naturally in English, and it plans the task, uses its tools and answers out loud.
 
 It is built in Python on the Claude API. It has 66 tools, long-term vector memory, its own speech pipeline, and an automated job-search pipeline. **2,400+ pytest tests** gate every change.
+
+![The cockpit: calendar, the animated voice orb and one-tap automations](docs/images/cockpit.png)
 
 ---
 
@@ -16,7 +20,40 @@ It is built in Python on the Claude API. It has 66 tools, long-term vector memor
 - **Research:** web search, Wikipedia, news and a research agent that writes up findings.
 - **Job search:** finds postings, scores each one against the CV, writes a tailored CV and cover letter, and applies only after one-click approval.
 
+## A look inside
+
+*Screenshots use sample data.*
+
+**Confirm before it sends.** Every outgoing message is staged first, showing who it goes to and what it says. It sends only when you say "send" or tap Send.
+
+<img src="docs/images/overlay.png" alt="Voice overlay with a WhatsApp message staged for confirmation" width="420">
+
+**Dashboard.** Calendar, inbox, news, a running multi-step mission, reminders, memory, and today's API cost and latency, all in one page served by the app.
+
+![Dashboard](docs/images/dashboard.png)
+
+**Job-search review.** Each posting gets a fit score out of 100, a reason, the skills it asks for that the CV lacks, and a tailored email or cover letter. Nothing is sent until the batch is approved.
+
+![Job applications waiting for approval](docs/images/jobs.png)
+
+**Trust ledger.** Every action is recorded with the words that caused it. While the service still allows it, an action can be undone (unsend, delete for everyone, restore). The record is append-only and encrypted.
+
+![Trust ledger of actions taken](docs/images/ledger.png)
+
+---
+
 ## How it works
+
+```mermaid
+flowchart LR
+    A[Hotkey or wake word] --> B[Silero VAD + Whisper]
+    B --> C{Claude: Sonnet or Haiku}
+    C <--> M[(ChromaDB memory)]
+    C --> D[66 tools and agents]
+    D --> S[Staged action: confirm first]
+    S --> L[(Encrypted action ledger)]
+    C --> T[Orpheus / Edge TTS reply]
+```
 
 | Layer | What it uses |
 |---|---|
