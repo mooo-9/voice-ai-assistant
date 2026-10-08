@@ -60,6 +60,7 @@ tzdata>=2024.1
 # NOTE: pyaudio has no Python 3.14 wheel; sounddevice (already listed above) is used instead
 openwakeword>=0.6.0
 onnxruntime>=1.16.0
+onnx>=1.16.0            # train_hey_fager builds the model graph itself
 
 # Phase 3B deps — document intelligence (PDF, Word, Excel)
 pymupdf>=1.24.0
