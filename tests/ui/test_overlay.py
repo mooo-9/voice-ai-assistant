@@ -292,7 +292,10 @@ class TestDesignRules:
         assert len(seen) == 3
         w.close()
 
-    def test_organic_loops_pause_when_hidden(self, qapp):
+    def test_organic_loops_pause_when_hidden(self, qapp, monkeypatch):
+        # The loops only run when the OS allows animation; CI runners turn it
+        # off, which is the reduced-motion path, not the one under test.
+        monkeypatch.setattr("ui.overlay.reduced_motion", lambda: False)
         w = _make_overlay(qapp)
         w._show_anchored()
         assert w._anim_timer.isActive()
