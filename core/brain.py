@@ -4487,12 +4487,15 @@ TOOLS: list[dict[str, Any]] = [
         "description": (
             "Read Mo's CV (a PDF or Word file path) into the profile the job applications "
             "are scored and written from, and the file they attach. Use when he says "
-            "'import my CV from ...' or 'my new CV is at ...'. erp=true for his ERP CV, "
-            "used for ERP roles (SAP, Odoo, Dynamics...)."
+            "'import my CV from ...' or 'my new CV is at ...'. The main CV is for AI and "
+            "data engineering roles. erp=true for his ERP CV, used for ERP roles (SAP, Odoo, "
+            "Dynamics...); analyst=true for his data analyst CV, used for data analyst/BI "
+            "roles and graduate programmes."
         ),
         "input_schema": {
             "type": "object",
-            "properties": {"path": {"type": "string"}, "erp": {"type": "boolean"}},
+            "properties": {"path": {"type": "string"}, "erp": {"type": "boolean"},
+                           "analyst": {"type": "boolean"}},
             "required": ["path"]
         }
     },

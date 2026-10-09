@@ -128,9 +128,9 @@ def check_application_replies() -> str:
     return pipeline.check_replies()
 
 
-def import_cv(path: str, erp: bool = False) -> str:
+def import_cv(path: str, erp: bool = False, analyst: bool = False) -> str:
     from core.career import profile
-    return profile.import_cv(path, erp=erp)
+    return profile.import_cv(path, erp=erp, analyst=analyst)
 
 
 def set_application_answer(question: str, answer: str) -> str:

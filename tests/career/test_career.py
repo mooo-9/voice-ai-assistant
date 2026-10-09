@@ -49,14 +49,14 @@ class TestSettings:
         """Most jobs the second practice run skipped asked for years of
         experience; these terms find the ones that don't."""
         terms = set(store.settings()["search_terms"])
-        assert {"junior data analyst", "junior business analyst",
+        assert {"junior data analyst", "junior data engineer",
                 "fresh graduate data analyst"} <= terms
 
-    def test_the_search_is_aimed_at_ai_data_and_business_analysis(self):
-        """Mo's CV targets AI, data analyst and business analyst roles; the
-        nightly scoring budget isn't spent on the old mix."""
+    def test_the_search_is_aimed_at_ai_and_data_engineering(self):
+        """Mo targets AI and data engineering first, with data analyst/BI and
+        SAP/ERP as backups; the nightly scoring budget isn't spent on the old mix."""
         terms = set(store.settings()["search_terms"])
-        assert {"data analyst", "business analyst", "power bi", "machine learning",
+        assert {"data analyst", "data engineer", "power bi", "machine learning",
                 "artificial intelligence", "AI engineer", "sap", "erp", "sap consultant"} <= terms
         assert not {"credit risk", "financial analyst", "IT support", "ERP SAP",
                     "software developer", "audit associate", "tax associate",
@@ -179,8 +179,8 @@ class TestRubric:
         assert "Only **stated** and **structural** gaps" in scorer._SYSTEM
         assert "1 year or 1.5 years is entry, never mid" in scorer._SYSTEM
         # An SAP/ERP role is on target, not a "function mismatch".
-        assert "AI engineering and AI roles, data analyst, business analyst, and SAP/ERP" \
-            in scorer._SYSTEM
+        assert "AI engineering and data engineering first" in scorer._SYSTEM
+        assert "SAP/ERP roles" in scorer._SYSTEM
         assert len(scorer._SYSTEM) < 8000      # ~1.1k tokens, not career-ops' 27k
 
 
@@ -310,7 +310,7 @@ class TestPrepareBatch:
                      for i, t in enumerate(["Sales Supervisor", "Maintenance Engineer",
                                             "Warehouse Coordinator"])]
         relevant = [_job("Data Analyst", "Valeo", "https://valeo.x/1", score=70),
-                    _job("Junior Business Analyst", "Some Startup",
+                    _job("Junior Data Engineer", "Some Startup",
                          "https://wuzzuf.net/jobs/p/2", score=70)]
         _, scored = self._run(unrelated + relevant, daily_target=1)
         assert scored == [
@@ -370,7 +370,8 @@ class TestPrepareBatch:
     @pytest.mark.parametrize("title,wanted", [
         ("Data Analyst", True), ("Business Intelligence Developer", True),
         ("Power BI Specialist", True), ("Machine Learning Engineer", True),
-        ("AI Developer", True), ("Data Scientist", True), ("Business Analyst - MENA", True),
+        ("AI Developer", True), ("Data Scientist", True), ("Business Analyst - MENA", False),
+        ("Junior Data Engineer", True), ("ETL Developer", True),
         ("People Analytics Specialist", True), ("NLP Engineer", True),
         ("Sales District Leader Designate", False),
         ("Electrical Maintenance Engineer", False), ("Chef de Partie", False),

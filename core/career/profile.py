@@ -9,11 +9,18 @@ from pathlib import Path
 
 from core.career import store
 
-# Mo keeps two CVs: the main one for AI, data and business-analysis roles, and
-# an ERP one. A job whose title names ERP work is scored, written and sent
-# from the ERP CV, once it is imported; everything else from the main one.
+# Mo keeps three CVs: the main one for AI and data engineering, an analyst one
+# for data analyst/BI roles and graduate programmes, and an ERP one. A job is
+# scored, written and sent from the CV its title calls for, once that CV is
+# imported; everything else from the main one. A title naming AI or data
+# engineering work gets the main CV even when it also says "analyst".
 _ERP_RE = re.compile(r"\b(erp|sap|odoo|netsuite|d365|dynamics 365"
                      r"|oracle (?:ebs|fusion|financials|apps))\b", re.IGNORECASE)
+_MAIN_RE = re.compile(r"\b(ai|artificial intelligence|machine learning|ml|llm|nlp|generative"
+                      r"|data engineer\w*|etl|big data|data platform|analytics engineer\w*"
+                      r"|data scien\w*)\b", re.IGNORECASE)
+_ANALYST_RE = re.compile(r"\b(data analy\w*|analytics|business intelligence|bi|power bi"
+                         r"|graduate program\w*|graduate scheme)\b", re.IGNORECASE)
 _CV_FIELDS = ("name", "headline", "education", "skills", "experience",
               "projects", "certifications", "languages")
 
@@ -73,17 +80,29 @@ def is_erp(job: dict) -> bool:
     return bool(_ERP_RE.search(job.get("title") or ""))
 
 
+def is_analyst(job: dict) -> bool:
+    title = job.get("title") or ""
+    return bool(_ANALYST_RE.search(title)) and not _MAIN_RE.search(title) and not is_erp(job)
+
+
 def for_job(profile: dict, job: dict) -> dict:
     """The profile an application to `job` is written and sent from: the ERP
     CV's for an ERP role once it's imported, the main one otherwise. A CV
     tailored to this one job (made with Mo in Claude Code) is the file sent."""
     erp = profile.get("erp") or {}
-    chosen = {**profile, **erp} if erp.get("cv_path") and is_erp(job) else profile
+    analyst = profile.get("analyst") or {}
+    if erp.get("cv_path") and is_erp(job):
+        chosen = {**profile, **erp}
+    elif analyst.get("cv_path") and is_analyst(job):
+        chosen = {**profile, **analyst}
+    else:
+        chosen = profile
     return {**chosen, "cv_path": job["cv_path"]} if job.get("cv_path") else chosen
 
 
-def import_cv(path: str, erp: bool = False) -> str:
-    """Read Mo's CV (PDF or Word) into the profile -- the ERP one when `erp`.
+def import_cv(path: str, erp: bool = False, analyst: bool = False) -> str:
+    """Read Mo's CV (PDF or Word) into the profile -- the ERP one when `erp`,
+    the analyst one (data analyst/BI roles, graduate programmes) when `analyst`.
     Answers the CV holds (phone, GPA...) fill empty answers; ones Mo gave by
     hand are kept."""
     cv = Path(path).expanduser()
@@ -113,6 +132,8 @@ def import_cv(path: str, erp: bool = False) -> str:
     cv_part.update({"cv_path": str(cv), "cv_text": text})
     if erp:
         profile["erp"] = cv_part
+    elif analyst:
+        profile["analyst"] = cv_part
     else:
         profile.update(cv_part)
     profile["answers"] = answers
@@ -123,7 +144,9 @@ def import_cv(path: str, erp: bool = False) -> str:
     ats = ats_problems(text)
     if ats:
         note += " Hiring systems may misread it: " + "; ".join(ats) + "."
-    which = "ERP CV (for ERP roles)" if erp else "CV"
+    which = ("ERP CV (for ERP roles)" if erp
+             else "Analyst CV (for data analyst/BI roles and graduate programmes)" if analyst
+             else "CV")
     return (f"{which} imported: {cv_part['name'] or cv.name} -- {len(cv_part['skills'])} "
             f"skills, {len(cv_part['experience'])} experience entries.{note}")
 

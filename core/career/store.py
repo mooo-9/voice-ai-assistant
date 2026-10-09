@@ -21,14 +21,17 @@ DEFAULTS = {
     "linkedin_daily_cap": 20,
     # People at target companies found and drafted a note for, per night.
     "referrals_per_day": 5,
+    # AI and data engineering first; data analyst/BI, SAP/ERP and graduate
+    # programmes as backups.
     "search_terms": [
-        "data analyst", "business analyst", "business intelligence", "power bi",
-        "data analytics", "data science", "machine learning", "artificial intelligence",
-        "AI engineer", "data analyst intern", "business analyst intern",
-        "junior data analyst", "junior business analyst", "fresh graduate data analyst",
-        "graduate program", "erp", "erp consultant", "sap", "odoo",
-        "machine learning engineer", "generative ai", "sap consultant", "junior sap",
-        "erp fresh graduate",
+        "AI engineer", "machine learning engineer", "machine learning", "generative ai",
+        "artificial intelligence", "data science",
+        "data engineer", "junior data engineer", "big data engineer", "ETL developer",
+        "analytics engineer",
+        "data analyst", "junior data analyst", "fresh graduate data analyst",
+        "data analyst intern", "business intelligence", "power bi", "data analytics",
+        "graduate program", "erp", "erp consultant", "sap", "odoo", "sap consultant",
+        "junior sap", "erp fresh graduate",
     ],
 }
 

@@ -15,12 +15,13 @@ _busy = threading.Lock()
 # Seconds between browser applications: a person's pace, not a bot's.
 _BROWSER_PAUSE = (45, 120)
 
-# Titles in Mo's field: AI, data analyst and business analyst roles (SAP/ERP
-# titles come in through profile.is_erp). "Analyst"
+# Titles in Mo's field: AI and data engineering first, then data analyst/BI
+# roles (SAP/ERP titles come in through profile.is_erp). "Analyst"
 # or "graduate" alone isn't: the first practice run spent 17 of 40 slots on
 # PepsiCo supply-chain and HR analysts.
 _FIELD_RE = re.compile(
-    r"\b(data analy\w*|data scien\w*|business analy\w*|analytics|business intelligence"
+    r"\b(data engineer\w*|data platform|big data|etl|analytics engineer\w*"
+    r"|data analy\w*|data scien\w*|analytics|business intelligence"
     r"|bi|power bi|machine learning|ml|ai|artificial intelligence|nlp|llm)\b", re.IGNORECASE)
 
 

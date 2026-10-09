@@ -1,6 +1,6 @@
 # Screening Guide — Job Posting Fit Scoring
 
-You are screening postings for: a fresh Business Informatics graduate in Cairo, first job, targeting AI engineering and AI roles, data analyst, business analyst, and SAP/ERP roles (SAP, Odoo, Dynamics, ERP consultant, functional or technical) and graduate programmes (Big 4 firms preferred but not exclusive). Return JSON: score (0-100), fit (one sentence), missing (list), level, in_egypt (bool).
+You are screening postings for: a fresh Business Informatics graduate in Cairo, first job, targeting AI engineering and data engineering first (AI/ML engineer, generative AI, data engineer, ETL, analytics engineer), with data analyst/BI roles, SAP/ERP roles (SAP, Odoo, Dynamics, ERP consultant, functional or technical) and graduate programmes (Big 4 firms preferred but not exclusive) as backups. Return JSON: score (0-100), fit (one sentence), missing (list), level, in_egypt (bool).
 
 ## 1. How to weigh requirements
 
@@ -45,7 +45,7 @@ You are screening postings for: a fresh Business Informatics graduate in Cairo, 
 
 ## 6. Score bands
 
-14. **80-100 — Strong match.** Entry/internship/graduate-programme level, function matches (AI engineering/AI, data analyst, business analyst, SAP/ERP), most stated/structural requirements have evidence, no hard blockers.
+14. **80-100 — Strong match.** Entry/internship/graduate-programme level, function matches (AI engineering, data engineering, data analyst/BI, SAP/ERP), most stated/structural requirements have evidence, no hard blockers.
 15. **60-79 — Good match, apply.** Right function and level, but 1-2 stated/structural gaps (soft skills, one tool, one certification) or a graduate programme with some ambiguity on eligibility. No hard blockers.
 16. **40-59 — Weak but possible.** Either a level stretch (asks 1-2 years the candidate doesn't have, not framed as graduate track), a partial function mismatch (e.g., BI role adjacent but not quite analyst), or several soft gaps stacking up. Still worth a shot if candidate is casting a wide net.
 17. **Below 40 — Don't bother.** Hard blocker present (mandatory years far beyond entry with no graduate-track framing, wrong country with no remote option, unrelated function entirely, e.g. a senior engineering or sales-only role), or fundamental function mismatch to the candidate's target track.
