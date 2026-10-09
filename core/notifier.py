@@ -62,6 +62,57 @@ class ElFagerNotifier:
     def send(self, text: str) -> bool:
         return self.send_whatsapp(text)
 
+    def delivery_problem(self) -> str:
+        """Why the last alert didn't reach Mo, or "". Twilio accepts a message
+        and fails it seconds later, so a send that "worked" can still be lost:
+        every alert from 11 to 30 September failed this way (63015, his number
+        no longer joined to the sandbox)."""
+        if not self.whatsapp_ready:
+            return "WhatsApp alerts aren't set up"
+        url = (f"https://api.twilio.com/2010-04-01/Accounts/"
+               f"{self._account_sid}/Messages.json")
+        try:
+            resp = httpx.get(url, params={"To": f"whatsapp:{self._to_number}", "PageSize": 1},
+                             auth=(self._account_sid, self._auth_token), timeout=5)
+            last = (resp.json().get("messages") or [{}])[0] if resp.status_code == 200 else {}
+        except Exception:
+            return ""
+        if last.get("status") not in ("failed", "undelivered"):
+            return ""
+        if last.get("error_code") in (63015, 63016):
+            return (f"WhatsApp alerts aren't reaching you: your number left the Twilio "
+                    f"sandbox. Send the sandbox's join message (e.g. 'join funny-generally') "
+                    f"to {self._from_number} on WhatsApp")
+        return f"the last WhatsApp alert failed (Twilio error {last.get('error_code')})"
+
+    def replies_since(self, since) -> list:
+        """(sent_at, text) for each WhatsApp message Mo sent to the sandbox number
+        after `since` (an aware datetime). Twilio keeps them; [] when it can't
+        be read."""
+        if not self.whatsapp_ready:
+            return []
+        from email.utils import parsedate_to_datetime
+        url = (f"https://api.twilio.com/2010-04-01/Accounts/"
+               f"{self._account_sid}/Messages.json")
+        try:
+            resp = httpx.get(url, params={"From": f"whatsapp:{self._to_number}",
+                                          "To": f"whatsapp:{self._from_number}",
+                                          "DateSent>": since.date().isoformat(),
+                                          "PageSize": 20},
+                             auth=(self._account_sid, self._auth_token), timeout=10)
+            messages = resp.json().get("messages", []) if resp.status_code == 200 else []
+        except Exception:
+            return []
+        out = []
+        for m in messages:
+            try:
+                sent = parsedate_to_datetime(m.get("date_sent") or m.get("date_created") or "")
+            except (TypeError, ValueError):
+                continue
+            if sent and sent > since:
+                out.append((sent, m.get("body") or ""))
+        return out
+
     def status(self) -> str:
         if self.whatsapp_ready:
             return f"WhatsApp (Twilio): ready -- alerts go to {self._to_number}."

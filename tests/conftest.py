@@ -20,6 +20,16 @@ def _isolated_trust_ledger(monkeypatch, tmp_path):
 
 
 @pytest.fixture(autouse=True)
+def _isolated_telemetry(monkeypatch, tmp_path):
+    """Every API call is costed into data/telemetry/, and that month's total
+    is what the monthly budget stops El Fager on. A test's fake calls must not
+    count against Mo's budget, and his real spend must not put a test over it."""
+    from core import telemetry
+    monkeypatch.setattr(telemetry, "_TELEMETRY_DIR", tmp_path / "telemetry")
+    monkeypatch.setattr(telemetry, "_SETTINGS_FILE", tmp_path / "telemetry_settings.json")
+
+
+@pytest.fixture(autouse=True)
 def _isolated_voice_learned(monkeypatch, tmp_path):
     """Songs El Fager plays teach Whisper their names, in data/voice_learned.json.
     A test that plays a fake song must not teach Mo's real El Fager "Song 39"."""
@@ -44,11 +54,80 @@ def _isolated_jobs_seen(monkeypatch, tmp_path):
 
 
 @pytest.fixture(autouse=True)
+def _no_real_job_page_browser(monkeypatch):
+    """The job search reads Wuzzuf in a headless Chromium when a plain read
+    is blocked. No test may launch one and reach the real site."""
+    from core.agents.job_search_agent import JobSearchAgent
+    monkeypatch.setattr(JobSearchAgent, "_render", lambda self, url: "")
+
+
+@pytest.fixture(autouse=True)
+def _no_real_career_sites(monkeypatch):
+    """The nightly search reads the target firms' own career sites (Workday,
+    Oracle, Phenom and the rest). No test may reach them; a test that needs a
+    page patches these with its own."""
+    from core.career import sources
+
+    def blocked(*args, **kwargs):
+        raise RuntimeError("real career sites are off in tests")
+
+    monkeypatch.setattr(sources, "_get_json", blocked)
+    monkeypatch.setattr(sources, "_post_json", blocked)
+    monkeypatch.setattr(sources, "_get_text", blocked)
+
+
+@pytest.fixture(autouse=True)
+def _isolated_schedules(monkeypatch, tmp_path):
+    """Mo's scheduled jobs (and tonight's job hunt, armed from the AUTOMATIONS
+    panel) live in data/schedules.json. A test must never arm or drop his."""
+    from core import scheduler
+    monkeypatch.setattr(scheduler, "_SCHEDULES_FILE", tmp_path / "schedules.json")
+    monkeypatch.setattr(scheduler, "_HISTORY_FILE", tmp_path / "schedule_history.jsonl")
+
+
+@pytest.fixture(autouse=True)
 def _isolated_career(monkeypatch, tmp_path):
     """Mo's CV profile, his applications and the pipeline's settings live in
     data/career/. A test's fake batch must never land in his morning review."""
     from core.career import store
     monkeypatch.setattr(store, "DIR", tmp_path / "career")
+
+
+@pytest.fixture(autouse=True)
+def _no_real_career_claude(monkeypatch):
+    """The job hunt sends its scoring and letters as Message Batches. A test
+    that reached the real API would pay for a batch of fake jobs out of Mo's
+    $10 a month. A test that needs a client patches claude._get_client."""
+    from core.career import claude
+
+    def blocked():
+        raise RuntimeError("real Claude calls from the job hunt are off in tests")
+
+    monkeypatch.setattr(claude, "_get_client", blocked)
+    # Claude Code answers on Mo's real subscription: no test starts it. A test
+    # of that path gives _code_exe a fake and patches subprocess.run.
+    monkeypatch.setattr(claude, "_code_exe", lambda: None)
+
+
+@pytest.fixture(autouse=True)
+def _isolated_ask_mo(monkeypatch, tmp_path):
+    """The questions waiting on Mo's WhatsApp reply live in data/ask_mo.json.
+    A test's question must never sit in his real queue."""
+    from core import ask_mo
+    monkeypatch.setattr(ask_mo, "_FILE", tmp_path / "ask_mo.json")
+
+
+@pytest.fixture(autouse=True)
+def _no_real_whatsapp_alerts(monkeypatch):
+    """Phone alerts go to Mo's real WhatsApp through Twilio, and some modules
+    load .env (with the Twilio keys) when imported. No test may send one or
+    read his replies: here El Fager has no keys. A test of the sending gives
+    its own notifier keys and patches httpx."""
+    from core import notifier
+    for key in ("TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN", "TWILIO_WHATSAPP_FROM",
+                "WHATSAPP_PHONE"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setattr(notifier, "_INSTANCE", None)     # rebuilt without the keys
 
 
 @pytest.fixture(autouse=True)
@@ -63,6 +142,31 @@ def _no_real_whatsapp(monkeypatch):
 
     monkeypatch.setattr(whatsapp_desktop, "find_chats", blocked)
     monkeypatch.setattr(whatsapp_desktop, "send", blocked)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_input(monkeypatch):
+    """Keys and clicks go to whatever window is in front. A WhatsApp test
+    pressed a real Enter into Mo's foreground window on every suite run. No
+    test may press, type, click or move; a test that needs one of these
+    replaces it with its own stub."""
+    def blocked(*args, **kwargs):
+        raise RuntimeError("real keyboard and mouse input is off in tests")
+
+    try:
+        import keyboard
+        for name in ("press_and_release", "send", "write", "press", "release"):
+            monkeypatch.setattr(keyboard, name, blocked)
+    except ImportError:
+        pass
+    try:
+        import pyautogui
+        for name in ("press", "hotkey", "write", "typewrite", "click", "doubleClick",
+                     "rightClick", "moveTo", "moveRel", "scroll", "keyDown", "keyUp",
+                     "dragTo", "mouseDown", "mouseUp"):
+            monkeypatch.setattr(pyautogui, name, blocked)
+    except ImportError:
+        pass
 
 
 @pytest.fixture(autouse=True)

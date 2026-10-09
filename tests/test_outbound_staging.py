@@ -154,6 +154,55 @@ class TestWhatsAppStages:
         assert len(opened) == 1
         assert opened[0].startswith("whatsapp://send?phone=201000000000")
 
+    # The number route waited up to 8 s for WhatsApp to come to the front,
+    # then pressed Enter whether it had or not — into whatever window Mo was
+    # using. Every suite run pressed a real Enter that way.
+
+    def _pressed(self, monkeypatch):
+        import keyboard
+        pressed = []
+        monkeypatch.setattr(keyboard, "press_and_release", pressed.append)
+        return pressed
+
+    def _stage_omar(self, w, monkeypatch):
+        monkeypatch.setattr(w, "_find_contact", lambda name: ("Omar", "+201000000000"))
+        w.prepare_whatsapp_message("Omar", "on my way")
+
+    def test_nothing_is_pressed_if_whatsapp_never_comes_to_the_front(self, whatsapp,
+                                                                     monkeypatch):
+        w, opened = whatsapp
+        pressed = self._pressed(monkeypatch)
+        self._stage_omar(w, monkeypatch)
+        out = w.confirm_whatsapp_send()
+        assert pressed == []
+        assert "press enter" in out.lower()
+        assert staging.current() is None           # handed to Mo, not left armed
+
+    def test_enter_is_pressed_once_whatsapp_is_in_front(self, whatsapp, monkeypatch):
+        w, opened = whatsapp
+        pressed = self._pressed(monkeypatch)
+        monkeypatch.setattr(w, "_wait_for_whatsapp_focus", lambda timeout=8.0: True)
+        self._stage_omar(w, monkeypatch)
+        assert w.confirm_whatsapp_send() == "Sent to Omar"
+        assert pressed == ["enter"]
+        assert staging.current() is None
+
+    def test_a_whatsapp_that_cannot_open_leaves_no_draft_behind(self, whatsapp,
+                                                                monkeypatch):
+        w, opened = whatsapp
+        pressed = self._pressed(monkeypatch)
+
+        def fails(*args, **kwargs):
+            raise OSError("no app for whatsapp://")
+
+        monkeypatch.setattr(w.os, "startfile", fails)
+        monkeypatch.setattr(w.subprocess, "run", fails)
+        self._stage_omar(w, monkeypatch)
+        out = w.confirm_whatsapp_send()
+        assert "couldn't open WhatsApp" in out
+        assert staging.current() is None
+        assert pressed == []
+
     def test_an_expired_message_is_refused(self, whatsapp):
         w, opened = whatsapp
         w._pending.update({

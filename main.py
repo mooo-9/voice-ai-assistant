@@ -98,16 +98,51 @@ _INSTANCE_MUTEX = None  # kept alive at module level so GC doesn't release it
 # than dying quietly. Auto-reset, so each click wakes the waiter exactly once.
 _SHOW_EVENT_NAME = "ElFagerShowRequested"
 
+# Created the moment the mutex is ours, and kept alive at module level.
+_SHOW_EVENT_HANDLE = None
+
+
+def _create_show_event():
+    """Open the door a second launch knocks on, before anything slow runs.
+
+    The event used to be created alongside the waiter thread — after Whisper,
+    Chroma, the Brain's tools and the overlay had all been built, seconds
+    after the mutex it pairs with was taken. A click on the desktop icon
+    inside that gap found the lock held and nothing listening, so El Fager
+    answered "Already running, but not responding" and showed no window.
+
+    The handshake is only honest when both halves exist at the same instant.
+    The event is auto-reset with no initial state, so a click that lands
+    before the waiter thread starts stays signalled and is delivered the
+    moment it does — the summon waits instead of being dropped.
+    """
+    global _SHOW_EVENT_HANDLE
+    import ctypes
+    _SHOW_EVENT_HANDLE = ctypes.windll.kernel32.CreateEventW(
+        None, False, False, _SHOW_EVENT_NAME) or None
+    return _SHOW_EVENT_HANDLE
+
 
 def _signal_running_instance() -> bool:
-    """Ask the instance that owns the mutex to show itself. True if it heard."""
+    """Ask the instance that owns the mutex to show itself. True if it heard.
+
+    Windows only lets the foreground process hand the foreground on, and this
+    process — the one Mo just launched from the desktop icon — is the one
+    holding that right. The instance being woken has none, so its
+    activateWindow() would be downgraded to a taskbar flash and the window
+    Mo asked for would open behind whatever he was reading. ASFW_ANY spends
+    this process's claim on the foreground on the instance that is about to
+    inherit the click, and then this one exits.
+    """
     import ctypes
     EVENT_MODIFY_STATE = 0x0002
+    ASFW_ANY = -1
     handle = ctypes.windll.kernel32.OpenEventW(EVENT_MODIFY_STATE, False,
                                                _SHOW_EVENT_NAME)
     if not handle:
         return False
     try:
+        ctypes.windll.user32.AllowSetForegroundWindow(ASFW_ANY)
         return bool(ctypes.windll.kernel32.SetEvent(handle))
     finally:
         ctypes.windll.kernel32.CloseHandle(handle)
@@ -124,8 +159,9 @@ def _watch_for_second_launch(signaler) -> None:
     import ctypes
     import threading
 
-    handle = ctypes.windll.kernel32.CreateEventW(None, False, False,
-                                                 _SHOW_EVENT_NAME)
+    # Normally created back at startup; created here if that call failed, so
+    # losing the handshake never costs more than the handshake.
+    handle = _SHOW_EVENT_HANDLE or _create_show_event()
     if not handle:
         return
 
@@ -193,6 +229,7 @@ def _enable_crash_trace() -> None:
 def main():
     _enable_crash_trace()
     _acquire_instance_lock()
+    _create_show_event()    # the lock is ours; be reachable from now on
 
     # Qt must own the main thread.
     # setQuitOnLastWindowClosed(False) is critical — the overlay hides (not closes),
@@ -250,7 +287,7 @@ def main():
 
     # ── Hotkey bridge ──────────────────────────────────────────────────────
     signaler = HotkeySignaler()
-    signaler.triggered.connect(overlay.toggle)       # Ctrl+Space → assistant
+    signaler.triggered.connect(overlay.toggle)       # Ctrl+F12 → assistant
     signaler.analyze_triggered.connect(overlay.analyze_screen)
     signaler.memory_query_triggered.connect(overlay.query_memory)
 
@@ -280,12 +317,14 @@ def main():
             QMessageBox.information(None, "El Fager", "Memory cleared.")
 
     signaler.memory_clear_triggered.connect(_on_memory_clear)
-    # Two ways in for each surface. Ctrl+Space is the design's canonical
-    # summon; the F12 pair is for the hand that's already on the top row.
+    # Ctrl+F12 is the summon; Ctrl+Space used to be, and was the reason El
+    # Fager kept appearing on its own. The combo is autocomplete in every
+    # editor and the input-method switch on Windows, and keyboard.add_hotkey
+    # sees it globally, so an unrelated keystroke anywhere summoned a window
+    # Mo had not asked for. The Ctrl+Shift pair keeps both surfaces reachable.
     # (Fn itself cannot be bound — it never leaves the keyboard's firmware,
     # so Windows and the keyboard library never see it.)
     for combo, emit, surface in (
-        ("ctrl+space", signaler.triggered.emit, "overlay"),
         ("ctrl+f12", signaler.triggered.emit, "overlay"),
         ("ctrl+shift+space", signaler.command_center_triggered.emit, "Command Center"),
         ("ctrl+shift+f12", signaler.command_center_triggered.emit, "Command Center"),
@@ -296,6 +335,10 @@ def main():
         except Exception as e:
             # Another app owning a combo must not stop El Fager from starting.
             print(f"[El Fager] Hotkey {combo} unavailable ({e}); the others still work.")
+
+    # ── What Mo was looking at before he turned to El Fager ────────────────
+    from core import focus_context
+    focus_context.start()
 
     # ── Wake word listener ─────────────────────────────────────────────────
     wake_listener = WakeWordListener(on_detected=signaler.wake_word_detected.emit)
@@ -430,7 +473,7 @@ def main():
         icon=_make_tray_image(),
         title="El Fager",
         menu=pystray.Menu(
-            pystray.MenuItem("Open Assistant  (Ctrl+Space)", on_tray_open),
+            pystray.MenuItem("Open Assistant  (Ctrl+F12)", on_tray_open),
             pystray.MenuItem("Open Command Center", on_tray_command_center),
             pystray.MenuItem("Open Cockpit", on_tray_cockpit),
             pystray.MenuItem("Open JARVIS HUD (legacy)", on_tray_hud),
@@ -587,7 +630,7 @@ def main():
     else:
         overlay.present()
 
-    print("[El Fager] Running. Press Ctrl+Space to activate.")
+    print("[El Fager] Running. Press Ctrl+F12 to activate.")
     sys.exit(app.exec())
 
 

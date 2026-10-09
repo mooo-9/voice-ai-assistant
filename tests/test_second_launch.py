@@ -12,6 +12,7 @@ the difference is that it hands off first.
 import ctypes
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
@@ -23,6 +24,8 @@ def unique_event_name(monkeypatch):
     """Never touch the real instance's event while the tests run."""
     monkeypatch.setattr(main, "_SHOW_EVENT_NAME",
                         f"ElFagerShowRequestedTest{time.monotonic_ns()}")
+    # Each test starts with no door open, whichever one opened it last.
+    monkeypatch.setattr(main, "_SHOW_EVENT_HANDLE", None)
 
 
 class _Signaler:
@@ -105,3 +108,102 @@ class TestTheEventItself:
             main._watch_for_second_launch(_Signaler())      # must not raise
         finally:
             monkeypatch.setattr(ctypes.windll.kernel32, "CreateEventW", real)
+
+
+class TestReachableWhileStillStarting:
+    """The gap between taking the lock and being able to hear a click.
+
+    Mo opens El Fager from the desktop icon. If it is already running he
+    should get the window he asked for; what he got instead, during the
+    seconds the first instance spent loading Whisper and Chroma, was a toast
+    saying it was not responding.
+    """
+
+    def test_the_event_exists_as_soon_as_it_is_created(self):
+        assert main._signal_running_instance() is False,             "nothing should be reachable before the event is created"
+        main._create_show_event()
+        assert main._signal_running_instance() is True,             "a second launch cannot reach an instance that has taken the lock"
+
+    def test_a_click_during_startup_is_delivered_not_dropped(self):
+        # The click lands while the first instance is still building itself,
+        # long before the waiter thread exists.
+        main._create_show_event()
+        assert main._signal_running_instance() is True
+
+        # ...and the waiter starts only afterwards, as main() gets that far.
+        signaler = _Signaler()
+        main._watch_for_second_launch(signaler)
+
+        assert signaler.fired.wait(timeout=3.0),             "the summon was dropped because the waiter had not started yet"
+
+    def test_the_waiter_reuses_the_handle_from_startup(self):
+        handle = main._create_show_event()
+        main._watch_for_second_launch(_Signaler())
+        assert main._SHOW_EVENT_HANDLE == handle,             "the waiter replaced the handle a second launch had already found"
+
+    def test_a_failed_creation_reports_it(self, monkeypatch):
+        real = ctypes.windll.kernel32.CreateEventW
+        monkeypatch.setattr(ctypes.windll.kernel32, "CreateEventW",
+                            lambda *a: 0)
+        try:
+            assert main._create_show_event() is None
+        finally:
+            monkeypatch.setattr(ctypes.windll.kernel32, "CreateEventW", real)
+
+    def test_startup_opens_the_door_before_it_loads_anything(self):
+        """Ordering is the whole fix, so the order itself is the assertion."""
+        source = Path(main.__file__).read_text(encoding="utf-8")
+        body = source[source.index("def main():"):]
+        opened = body.index("_create_show_event()")
+        for slow in ("VoiceInput()", "Memory()", "Brain(", "OverlayWindow("):
+            assert opened < body.index(slow),                 f"a click landing while {slow} is built would find nobody home"
+
+
+class TestTheWindowComesForward:
+    """A summon that opens behind the browser is not a summon.
+
+    The instance being woken sits in the background, and Windows does not let
+    a background process take the foreground. The process Mo launched does
+    hold that right, so it grants it before it exits.
+    """
+
+    def test_the_foreground_is_handed_over_before_the_signal(self, monkeypatch):
+        main._create_show_event()
+        order = []
+
+        real_allow = ctypes.windll.user32.AllowSetForegroundWindow
+        real_set = ctypes.windll.kernel32.SetEvent
+
+        def allow(pid):
+            order.append(("allow", pid))
+            return real_allow(pid)
+
+        def set_event(handle):
+            order.append(("set", handle))
+            return real_set(handle)
+
+        monkeypatch.setattr(ctypes.windll.user32, "AllowSetForegroundWindow", allow)
+        monkeypatch.setattr(ctypes.windll.kernel32, "SetEvent", set_event)
+        try:
+            assert main._signal_running_instance() is True
+        finally:
+            monkeypatch.setattr(ctypes.windll.user32,
+                                "AllowSetForegroundWindow", real_allow)
+            monkeypatch.setattr(ctypes.windll.kernel32, "SetEvent", real_set)
+
+        assert [step for step, _ in order] == ["allow", "set"],             "the right to the foreground must be granted before the wake-up"
+        assert order[0][1] == -1, "ASFW_ANY (-1) is what grants it"
+
+    def test_nothing_is_granted_when_there_is_nobody_to_grant_it_to(self, monkeypatch):
+        # No event: the instance is wedged or gone. Handing the foreground to
+        # nothing would leave Mo's own window able to be stolen for nothing.
+        calls = []
+        real_allow = ctypes.windll.user32.AllowSetForegroundWindow
+        monkeypatch.setattr(ctypes.windll.user32, "AllowSetForegroundWindow",
+                            lambda pid: calls.append(pid))
+        try:
+            assert main._signal_running_instance() is False
+        finally:
+            monkeypatch.setattr(ctypes.windll.user32,
+                                "AllowSetForegroundWindow", real_allow)
+        assert calls == [], "granted the foreground with no instance listening"

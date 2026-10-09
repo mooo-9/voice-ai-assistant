@@ -219,9 +219,10 @@ def _comet_running() -> bool:
         return False
 
 
-def _close_comet(timeout: float = 10.0) -> bool:
+def _close_comet(timeout: float = 30.0) -> bool:
     """Ask every Comet window to close, as clicking X would — no force, so
-    Comet saves the session and restores the tabs when it reopens."""
+    Comet saves the session and restores the tabs when it reopens. Live, with
+    ~10 processes open, it took longer than 10 s and the application failed."""
     try:
         subprocess.run(["taskkill", "/IM", _EXE], capture_output=True, timeout=5)
     except Exception as e:

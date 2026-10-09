@@ -3,7 +3,7 @@ graduate programme deadlines, referrals, and the job hunt raised first."""
 import json
 import threading
 import urllib.request
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from http.server import ThreadingHTTPServer
 from unittest.mock import MagicMock, patch
 
@@ -99,7 +99,7 @@ class TestReferrals:
         assert again == "No new people found to ask for a referral."
         (ref,) = referrals.to_send()
         assert ref["role"] == "Technology Consulting Graduate"
-        assert len(ref["note"]) == 300                   # LinkedIn's cap
+        assert len(ref["note"]) == 200                   # LinkedIn's free-account cap
         assert "went to the same university" in ask.call_args.args[0]
 
     def test_companies_with_applications_in_play_come_first(self):
@@ -108,6 +108,49 @@ class TestReferrals:
         order = referrals._companies_in_play()
         assert order[0] == "Valeo"
         assert order[1:5] == ["Deloitte", "PwC", "EY", "KPMG"]
+
+    def test_connections_export_keeps_only_target_companies(self, tmp_path):
+        csv_file = tmp_path / "Connections.csv"
+        csv_file.write_text(
+            "Notes:\n\"When exporting your connection data, you may notice...\"\n\n"
+            "First Name,Last Name,URL,Email Address,Company,Position,Connected On\n"
+            "Sara,Ali,https://www.linkedin.com/in/sara,,PwC Middle East,Associate,01 Sep 2026\n"
+            "Omar,Adel,https://www.linkedin.com/in/omar,,Some Startup,CEO,02 Sep 2026\n",
+            encoding="utf-8")
+        out = referrals.import_connections(str(csv_file))
+        assert out.startswith("1 of your connections work at target companies: PwC.")
+        assert [p["name"] for p in referrals.connections_at("PwC")] == ["Sara Ali"]
+        assert referrals.import_connections(str(tmp_path / "nope.csv")).startswith("Error")
+
+    def test_without_a_path_the_export_in_downloads_is_found_even_zipped(
+            self, monkeypatch, tmp_path):
+        """Mo says 'import my LinkedIn connections'; the file LinkedIn emailed
+        him is a zip in Downloads."""
+        import zipfile
+        monkeypatch.setattr(referrals, "DOWNLOADS", tmp_path)
+        assert referrals.import_connections().startswith("No LinkedIn export in Downloads")
+        with zipfile.ZipFile(tmp_path / "Basic_LinkedInDataExport_09-30-2026.zip", "w") as z:
+            z.writestr("Connections.csv",
+                       "Notes:\n\nFirst Name,Last Name,URL,Email Address,Company,Position,"
+                       "Connected On\nSara,Ali,https://www.linkedin.com/in/sara,,KPMG Egypt,"
+                       "Auditor,01 Sep 2026\n")
+        from tools import career_tool
+        assert career_tool.import_linkedin_connections().startswith(
+            "1 of your connections work at target companies: KPMG.")
+
+    def test_a_connection_is_asked_before_strangers_and_needs_no_note(self):
+        store.save("connections.json", [{"name": "Sara Ali", "headline": "Associate",
+                                          "url": "https://www.linkedin.com/in/sara",
+                                          "company": "PwC", "alumni": False, "connected": True}])
+        stranger = {"name": "Ahmed Hassan", "headline": "Associate",
+                    "url": "https://www.linkedin.com/in/a", "company": "PwC", "alumni": True}
+        with patch.object(referrals, "search_people", return_value=[stranger]), \
+             patch("core.career.claude.ask", return_value={"note": "N", "message": "M"}) as ask:
+            out = referrals.find("PwC", count=1)
+        assert out.startswith("1 people to ask for a referral: Sara Ali (PwC)")
+        (ref,) = referrals.to_send()
+        assert ref["note"] == "" and ref["connected"]
+        assert "already one of his connections" in ask.call_args.args[0]
 
     def test_mark(self):
         store.save("referrals.json", {"r1": {"id": "r1", "name": "Ahmed", "company": "PwC",
@@ -139,6 +182,43 @@ class TestFocus:
         assert "student" not in SYSTEM_PROMPT.split("Personality:")[0]
 
 
+class TestFollowUps:
+    """A sent application with no answer is followed up a week later, once
+    more a week after that, then let go (career-ops' cadence)."""
+    def _sent(self, url, days_ago, **fields):
+        at = (datetime.now() - timedelta(days=days_ago)).isoformat(timespec="seconds")
+        return tracker.add({"url": url, "title": "Analyst", "company": "Valeo",
+                            "status": "applied", "applied_at": at, **fields})
+
+    def test_due_a_week_after_sending(self):
+        old = self._sent("u1", 8)
+        self._sent("u2", 3)
+        tracker.add({"url": "u3", "title": "B", "company": "EY", "status": "interview",
+                     "applied_at": "2026-01-01T00:00:00"})
+        assert [a["id"] for a in tracker.follow_ups_due()] == [old["id"]]
+
+    def test_once_more_a_week_later_then_never(self):
+        app = self._sent("u1", 30)
+        tracker.mark_followed_up(app["id"])
+        assert tracker.follow_ups_due() == []
+        later = datetime.now() + timedelta(days=8)
+        assert [a["id"] for a in tracker.follow_ups_due(later)] == [app["id"]]
+        tracker.mark_followed_up(app["id"])
+        assert tracker.follow_ups_due(datetime.now() + timedelta(days=60)) == []
+
+    def test_raised_in_status_and_every_turn(self):
+        app = self._sent("u1", 8, hr_email="hr@valeo.com")
+        from core.career import pipeline
+        assert f"{app['id']}: Analyst at Valeo (email hr@valeo.com)" in pipeline.status_text()
+        assert "1 applications due a follow-up" in focus.status_line()
+
+    def test_mark_tool(self):
+        from tools import career_tool
+        app = self._sent("u1", 8)
+        assert career_tool.mark_followed_up(app["id"]).endswith("due in 7 days.")
+        assert career_tool.mark_followed_up("nope").startswith("Error")
+
+
 class TestMorningNudge:
     def _engine(self, monkeypatch, tmp_path):
         import core.proactive as pro
@@ -151,13 +231,24 @@ class TestMorningNudge:
 
     def test_says_what_is_waiting_once_a_morning(self, monkeypatch, tmp_path):
         engine, said, remote = self._engine(monkeypatch, tmp_path)
-        tracker.add({"url": "u", "title": "A", "status": "ready"})
+        tracker.add({"url": "u", "title": "A"})
+        tracker.update(tracker.job_id("u"), "ready", "drafted")
+        # One he left unsent days ago stays saved, not nagged about.
+        tracker.add({"url": "old", "title": "B", "status": "ready", "events": [
+            {"at": "2026-01-01T02:00:00", "status": "ready", "note": "drafted"}]})
         store.save("programmes.json", {"a": _programme("a", deadline=_in(2))})
         engine._check_job_hunt()
         engine._check_job_hunt()
-        assert said == ["Mo, 1 job applications are ready for your review; "
+        assert said == ["Mo, 1 new job applications are ready for your review; "
                         "a programme closes in 2 days."]
         assert remote == [True]
+
+    def test_follow_ups_due_are_said_too(self, monkeypatch, tmp_path):
+        engine, said, _ = self._engine(monkeypatch, tmp_path)
+        tracker.add({"url": "u", "title": "A", "company": "Valeo", "status": "applied",
+                     "applied_at": (datetime.now() - timedelta(days=8)).isoformat()})
+        engine._check_job_hunt()
+        assert said == ["Mo, 1 applications are due a follow-up: Valeo."]
 
     def test_quiet_when_nothing_waits(self, monkeypatch, tmp_path):
         engine, said, _ = self._engine(monkeypatch, tmp_path)
@@ -168,11 +259,35 @@ class TestMorningNudge:
 class TestTools:
     def test_programmes_tool_and_referral_tools_are_wired(self):
         from core.brain import _SLIM_TOOLS, _TOOL_GROUP_NAMES, _select_tools
-        new = {"graduate_programmes", "find_referrals", "referral_list", "mark_referral"}
+        new = {"graduate_programmes", "find_referrals", "referral_list", "mark_referral",
+               "import_linkedin_connections", "mark_followed_up", "evaluate_job",
+               "skill_gaps", "retry_applications"}
         assert new <= {t["name"] for t in _SLIM_TOOLS}
         assert new <= _TOOL_GROUP_NAMES["jobs"]
         assert "application_status" in {t["name"] for t in _select_tools("daily briefing please")}
         assert new <= {t["name"] for t in _select_tools("who can give me a referral at PwC")}
+
+    @pytest.mark.parametrize("message", [
+        "is this job worth it https://www.linkedin.com/jobs/view/1", "what should I learn",
+        "what skills am I missing", "import my linkedin connections from my downloads",
+        "I followed up with Valeo", "who can refer me at KPMG", "any AI engineer openings",
+        "find me SAP jobs"])
+    def test_how_mo_asks_reaches_the_job_tools(self, message):
+        """Live, 'what should I learn' and 'I followed up with Valeo' loaded no
+        job tool, so El Fager couldn't act on them."""
+        from core.brain import _select_tools
+        assert "evaluate_job" in {t["name"] for t in _select_tools(message)}
+
+    def test_check_the_job_i_copied(self):
+        """Mo can't say a link aloud: the one he copied is judged."""
+        from tools import career_tool
+        with patch("tools.clipboard_tool.get_clipboard_text",
+                   return_value="look https://www.linkedin.com/jobs/view/42 thanks"), \
+             patch("core.career.pipeline.evaluate_one", return_value="ok") as ev:
+            assert career_tool.evaluate_job() == "ok"
+        ev.assert_called_once_with("https://www.linkedin.com/jobs/view/42")
+        with patch("tools.clipboard_tool.get_clipboard_text", return_value="[Clipboard is empty]"):
+            assert career_tool.evaluate_job().startswith("No job link given or copied")
 
     def test_mark_referral_dispatch(self):
         from core.brain import Brain
@@ -211,3 +326,23 @@ class TestReviewPageReferrals:
                                               "Authorization": "Bearer k"})
         assert json.loads(urllib.request.urlopen(req, timeout=5).read())["ok"] is True
         assert referrals.to_send() == []
+
+    def test_a_form_question_is_answered_on_the_page_and_sent_again(self, server):
+        """Mo answers from his phone; the application that stopped goes again."""
+        from core.career import pipeline
+        tracker.add({"url": "https://v.com/1", "title": "Analyst", "company": "Valeo",
+                     "status": "approved", "channel": "site"})
+        tracker.update(tracker.job_id("https://v.com/1"), "needs_you", "BLOCKED: Driving licence?")
+        req = urllib.request.Request(f"{server}/api/jobs", headers={"Authorization": "Bearer k"})
+        data = json.loads(urllib.request.urlopen(req, timeout=5).read())
+        assert data["waiting"] == [{"id": tracker.job_id("https://v.com/1"), "title": "Analyst",
+                                    "company": "Valeo", "question": "Driving licence?"}]
+        req = urllib.request.Request(f"{server}/api/jobs_answer", method="POST",
+                                     data=json.dumps({"question": "Driving licence?",
+                                                      "answer": "Yes"}).encode(),
+                                     headers={"Content-Type": "application/json",
+                                              "Authorization": "Bearer k"})
+        with patch.object(pipeline, "start_in_background", return_value=True):
+            out = json.loads(urllib.request.urlopen(req, timeout=5).read())
+        assert out["ok"] and out["result"].endswith("Retrying 1 application(s) now.")
+        assert profile.load()["extra_answers"] == {"Driving licence?": "Yes"}

@@ -1,9 +1,10 @@
 """
 JobSearchAgent -- finds internships and entry-level jobs in Egypt for Mo.
 
-Reads Wuzzuf's search page and LinkedIn's logged-out job listing directly.
-Bayt and Forasna, and either of the first two when it blocks reading, come
-through a web search limited to that site. It only reads postings: it never
+Reads Wuzzuf's search page and LinkedIn's logged-out job listing directly;
+Wuzzuf, which puts Cloudflare's check in front of a plain read, in a headless
+browser. Either one comes through a web search limited to that site when it
+blocks reading. Mo dropped Bayt and Forasna. It only reads postings: it never
 applies. Every job it shows is remembered in data/jobs_seen.json, so the same
 posting never comes back as new.
 """
@@ -18,20 +19,27 @@ from core.agents.base_agent import BaseAgent
 
 _FILE = Path(__file__).parent.parent.parent / "data" / "jobs_seen.json"
 
-# What Mo is after: internships and entry-level Data/Business Analyst and
-# Software/IT roles. Searched when he doesn't name a role.
-TARGET_ROLES = ["data analyst", "business analyst", "software developer", "IT support"]
+# What Mo is after: internships and entry-level AI engineering and AI, data
+# analyst, business analyst and SAP/ERP roles. Searched when he doesn't name a role.
+TARGET_ROLES = ["data analyst", "business analyst", "business intelligence", "machine learning",
+                "AI engineer", "SAP", "ERP"]
 
-SOURCES = ["Wuzzuf", "LinkedIn", "Bayt", "Forasna"]
+SOURCES = ["Wuzzuf", "LinkedIn"]
 
 _MAX_SHOWN = 15
 _TIMEOUT = 10
+_RENDER_TIMEOUT_MS = 20000
 
 _WUZZUF_URL = "https://wuzzuf.net/search/jobs/?q={q}&a=hpb"
+
 # The listing LinkedIn's own logged-out jobs page loads. f_E=1,2 is internship
 # and entry level; f_TPR=r604800 is the past week.
 _LINKEDIN_URL = ("https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search"
-                 "?keywords={q}&location=Egypt&f_E=1%2C2&f_TPR=r604800&start=0")
+                 "?keywords={q}&location=Egypt&f_E=1%2C2&f_TPR=r604800&start={start}")
+# It answers 10 at a time; the first page alone left 35 of data analyst's 45
+# postings that week unread.
+_LINKEDIN_PAGE = 10
+_LINKEDIN_PAGES = 3
 
 # Site searched, and the path a single job's page has there. Listing pages
 # ("Data Analyst Jobs in Cairo") come back from the same searches and are
@@ -39,13 +47,17 @@ _LINKEDIN_URL = ("https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPosting
 _SEARCH_SITES = {
     "Wuzzuf": ("wuzzuf.net", re.compile(r"wuzzuf\.net/(jobs/p|internship)/")),
     "LinkedIn": ("linkedin.com/jobs", re.compile(r"linkedin\.com/jobs/view/")),
-    "Bayt": ("bayt.com", re.compile(r"bayt\.com/en/egypt/jobs/[^/]+-\d+/?$")),
-    "Forasna": ("forasna.com", re.compile(r"forasna\.com/job/p/")),
 }
 
 # Postings above entry level, matched on whole words in the title.
 _SENIOR_RE = re.compile(
-    r"\b(senior|sr|lead|principal|head|manager|director|expert)\b", re.IGNORECASE)
+    r"\b(senior|sr|lead|principal|head|manager|director|expert"
+    r"|vice president|vp|avp|svp|evp)\b", re.IGNORECASE)
+# Banks, matched on the employer's name: Mo doesn't want to work at one.
+_BANK_RE = re.compile(
+    r"\b(bank|banque|banking|bancorp|cib|qnb|hsbc|nbe|aaib|saib|citi|citibank|alexbank"
+    r"|adib|mashreq|emirates nbd|attijariwafa)\b|cr[eé]dit agricole|بنك|مصرف",
+    re.IGNORECASE)
 _JUNIOR_RE = re.compile(
     r"\b(intern|internship|junior|jr|entry|graduate|grad|fresh|trainee)\b", re.IGNORECASE)
 
@@ -57,7 +69,7 @@ class JobSearchAgent(BaseAgent):
 
     @property
     def description(self) -> str:
-        return "Finds internships and entry-level jobs in Egypt on Wuzzuf, LinkedIn, Bayt and Forasna."
+        return "Finds internships and entry-level jobs in Egypt on Wuzzuf and LinkedIn."
 
     def run(self, task: str = "", show_all: bool = False) -> str:
         roles = [task.strip()] if task.strip() else TARGET_ROLES
@@ -72,7 +84,7 @@ class JobSearchAgent(BaseAgent):
                 jobs.extend(found)
         failed = set(SOURCES) - read
 
-        jobs = [j for j in _dedupe(jobs) if not _SENIOR_RE.search(j["title"])]
+        jobs = [j for j in _dedupe(jobs) if not _unwanted(j)]
         seen = _load_seen()
         new = [j for j in jobs if j["url"] not in seen]
         shown = jobs if show_all else new
@@ -91,12 +103,24 @@ class JobSearchAgent(BaseAgent):
     def _from_source(self, source: str, role: str) -> "list[dict] | None":
         """Jobs for one role from one board, or None when it couldn't be read
         at all. A board read directly falls back to the web search."""
-        direct = {"Wuzzuf": (_WUZZUF_URL, _parse_wuzzuf),
-                  "LinkedIn": (_LINKEDIN_URL, _parse_linkedin)}.get(source)
+        if source == "Wuzzuf":
+            url = _WUZZUF_URL.format(q=urllib.parse.quote(role))
+            html = self._fetch(url)
+            jobs = _parse_wuzzuf(html) if html else []
+            if not jobs:
+                html = self._render(url)
+                jobs = _parse_wuzzuf(html) if html else []
+            return jobs or self._web_search(source, role)
+        direct = {"LinkedIn": (_LINKEDIN_URL, _parse_linkedin)}.get(source)
         if direct:
             url, parse = direct
-            html = self._fetch(url.format(q=urllib.parse.quote(role)))
-            jobs = parse(html) if html else []
+            jobs = []
+            for start in range(0, _LINKEDIN_PAGE * _LINKEDIN_PAGES, _LINKEDIN_PAGE):
+                html = self._fetch(url.format(q=urllib.parse.quote(role), start=start))
+                page = parse(html) if html else []
+                jobs += page
+                if len(page) < _LINKEDIN_PAGE:
+                    break
             if jobs:
                 return jobs
         return self._web_search(source, role)
@@ -109,6 +133,25 @@ class JobSearchAgent(BaseAgent):
                              headers={"User-Agent": _BROWSER_UA,
                                       "Accept-Language": "en-US,en;q=0.9"})
             return resp.text if resp.status_code < 400 else ""
+        except Exception:
+            return ""
+
+    def _render(self, url: str) -> str:
+        """The page as headless Chromium has it once Cloudflare's "Just a
+        moment..." check has passed by itself (a few seconds), or ""."""
+        try:
+            from playwright.sync_api import sync_playwright
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True)
+                try:
+                    page = browser.new_page()
+                    page.goto(url, wait_until="domcontentloaded", timeout=_RENDER_TIMEOUT_MS)
+                    page.wait_for_function("!document.title.includes('Just a moment')",
+                                           timeout=_RENDER_TIMEOUT_MS)
+                    page.wait_for_load_state("domcontentloaded")
+                    return page.content()
+                finally:
+                    browser.close()
         except Exception:
             return ""
 
@@ -202,6 +245,11 @@ def _canonical(url: str) -> str:
 def _clean_search_title(title: str) -> str:
     # "Data Analyst Intern at TMentors| Maadi, Cairo on Wuzzuf | Egypt"
     return re.split(r"\s*\|\s*|\s+–\s+", title)[0].strip()
+
+
+def _unwanted(job: dict) -> bool:
+    """Above entry level, or at a bank."""
+    return bool(_SENIOR_RE.search(job["title"]) or _BANK_RE.search(job.get("company", "")))
 
 
 def _dedupe(jobs: list[dict]) -> list[dict]:

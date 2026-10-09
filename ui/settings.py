@@ -349,6 +349,25 @@ class SettingsWindow(QWidget):
                  "TALKING OVER IT CUTS IT OFF MID-WORD · TURN OFF IF LOUD "
                  "SPEAKERS MAKE IT INTERRUPT ITSELF")
 
+        self._duck = Toggle(self._settings.get("duck_while_listening", True))
+        self._duck.toggled.connect(lambda v: self._set("duck_while_listening", v))
+        page.row("Quiet while listening", self._duck,
+                 "OTHER APPS DROP TO 15% WHILE THE MIC IS OPEN")
+
+        self._vocabulary = QLineEdit(
+            ", ".join(self._settings.get("voice_vocabulary", []) or []))
+        self._vocabulary.setCursorPosition(0)     # show the list from its start
+        self._vocabulary.setPlaceholderText("Estanna, Fares Sokar, …")
+        self._vocabulary.setMinimumWidth(260)
+        self._vocabulary.setStyleSheet(
+            f"QLineEdit {{ background: {tokens.CK_CARD}; color: {tokens.CK_TEXT_HI};"
+            f" border: 1px solid {tokens.CK_HAIRLINE}; border-radius: {tokens.R2}px;"
+            f" padding: 6px 10px; font-family: {theme.FONT}; font-size: 13px; }}"
+            f"QLineEdit:focus {{ border-color: {tokens.CK_STATE['listening']}; }}"
+        )
+        self._vocabulary.editingFinished.connect(self._save_vocabulary)
+        page.row("Names it should know", self._vocabulary, "SEPARATE WITH COMMAS")
+
         cues = self._settings.get("sound_cues", True)
         self._cues = Toggle(cues if isinstance(cues, bool) else any(cues.values()))
         self._cues.toggled.connect(lambda v: self._set("sound_cues", v))
@@ -540,6 +559,18 @@ class SettingsWindow(QWidget):
         _save_settings(self._settings)
         if self._on_applied:
             self._on_applied(self._settings)
+
+    def _save_vocabulary(self):
+        """The names Whisper is told to expect: one list, in the order typed,
+        blanks and repeats (any case) dropped."""
+        names, seen = [], set()
+        for name in self._vocabulary.text().split(","):
+            name = " ".join(name.split())
+            if name and name.lower() not in seen:
+                names.append(name)
+                seen.add(name.lower())
+        if names != self._settings.get("voice_vocabulary", []):
+            self._set("voice_vocabulary", names)
 
     # ── Routines ──────────────────────────────────────────────────────────
 

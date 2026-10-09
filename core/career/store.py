@@ -7,9 +7,9 @@ DIR = Path(__file__).parent.parent.parent / "data" / "career"
 
 _lock = threading.RLock()
 
-# Search terms cover Mo's targets (internships and entry-level Data/Business
-# Analyst and Software/IT) and the Big 4's four service lines: technology
-# consulting, data & analytics, risk / IT audit, and audit & tax.
+# Search terms cover Mo's targets: internships and entry-level AI engineering
+# and AI, data analyst, business analyst and SAP/ERP roles, plus graduate
+# programmes; the Big 4's data & analytics line comes in through them.
 DEFAULTS = {
     # Practice mode until Mo's CV is final: everything is found, scored and
     # drafted, nothing is sent.
@@ -19,18 +19,19 @@ DEFAULTS = {
     "min_score": 60,
     # LinkedIn restricts accounts that apply at machine pace.
     "linkedin_daily_cap": 20,
-    # A firm's hiring system keeps every application; a wave of them to one
-    # Big 4 firm reads as spray, and rejections can bar re-applying for months.
-    "big4_per_firm_per_month": 3,
     # People at target companies found and drafted a note for, per night.
     "referrals_per_day": 5,
-    # The autonomous task that runs the job hunt every night, once Mo turns it on.
-    "nightly_task_id": "",
+    # AI and data engineering first; data analyst/BI, SAP/ERP and graduate
+    # programmes as backups.
     "search_terms": [
-        "data analyst", "business analyst", "business intelligence",
-        "software developer", "IT support", "ERP SAP", "graduate program",
-        "fresh graduate", "internship", "technology consultant",
-        "risk advisory", "IT audit", "audit associate", "tax associate",
+        "AI engineer", "machine learning engineer", "machine learning", "generative ai",
+        "artificial intelligence", "data science",
+        "data engineer", "junior data engineer", "big data engineer", "ETL developer",
+        "analytics engineer",
+        "data analyst", "junior data analyst", "fresh graduate data analyst",
+        "data analyst intern", "business intelligence", "power bi", "data analytics",
+        "graduate program", "erp", "erp consultant", "sap", "odoo", "sap consultant",
+        "junior sap", "erp fresh graduate",
     ],
 }
 

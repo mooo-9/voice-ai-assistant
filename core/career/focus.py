@@ -17,10 +17,21 @@ def status_line() -> str:
                          + ", ".join(sorted({a.get('company') or '?' for a in interviews})))
         if ready:
             parts.append(f"{ready} applications waiting for his review")
-        if needs_you:
-            parts.append(f"{needs_you} forms waiting for him to press Submit in Comet")
+        from core.career import pipeline
+        asked = pipeline.blocked_questions()
+        if asked:
+            parts.append("a job form asks what El Fager doesn't know -- ask him, save it with "
+                         "set_application_answer (that retries it): "
+                         + "; ".join(f"'{pipeline._question(a)}' ({a.get('company') or '?'})"
+                                     for a in asked[:3]))
+        if needs_you - len(asked):
+            parts.append(f"{needs_you - len(asked)} applications waiting on him (a sign-in or an "
+                         "account a site wants); once done, retry_applications")
         for p in programmes.closing_soon()[:2]:
             parts.append(f"{p['name']} closes in {programmes.days_left(p)} days")
+        follow = len(tracker.follow_ups_due())
+        if follow:
+            parts.append(f"{follow} applications due a follow-up")
         pending = len(referrals.to_send())
         if pending:
             parts.append(f"{pending} referral notes to send")

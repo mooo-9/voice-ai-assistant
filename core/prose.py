@@ -27,10 +27,17 @@ _NUMBERED = re.compile(r"^[ \t]*\d+\.\s+", re.MULTILINE)
 _LINK = re.compile(r"\[([^\]]+)\]\([^)]+\)")
 _RULE = re.compile(r"^[-_*]{3,}\s*$", re.MULTILINE)
 
-# "**Label:** body" or "Label: body" at the start of a block. The label is
-# short by definition — a heading, not a sentence that happens to have a colon.
-_LABELLED = re.compile(r"^\s*(?:\*{2,3})?\s*([A-Z][^:*\n]{1,40}?)\s*(?:\*{2,3})?\s*:\s*(.*)$",
-                       re.DOTALL)
+# "**Label:** body" or "**Label**: body" at the start of a block is always a
+# label. A plain "Label: body" is one only in a run of them — a meal plan's
+# "Breakfast: ... / Lunch: ..." — because on its own it is usually a sentence:
+# "Tomorrow in Cairo: sunny" put "TOMORROW IN CAIRO" over "sunny". Either way
+# the label is short — a heading, not a clause that has a colon.
+_BOLD_MARK = r"(?:\*{2,3}|_{2})"
+_BOLD_LABELLED = re.compile(
+    rf"^\s*{_BOLD_MARK}\s*([A-Z][^:*_\n]{{1,40}}?)\s*"
+    rf"(?::\s*{_BOLD_MARK}|{_BOLD_MARK}\s*:)\s*(.*)$",
+    re.DOTALL)
+_PLAIN_LABELLED = re.compile(r"^\s*([A-Z][^:*\n]{1,40}?)\s*:\s*(.*)$", re.DOTALL)
 
 
 def plain(text: str) -> str:
@@ -62,23 +69,32 @@ def sections(text: str) -> "list[tuple[str, str]]":
     Returns [] for empty input, never None, so callers can loop without a
     guard.
     """
-    cleaned = plain(text)
-    if not cleaned:
-        return []
+    def labelled(match, plain_style: bool):
+        if not match:
+            return None
+        label, body = match.group(1).strip(), plain(match.group(2))
+        # A heading, not the first half of a sentence: a body, a short label,
+        # and for plain labels no trailing digit ("It's 2:30", "3:1").
+        if not body or len(label.split()) > 5 or (plain_style and label[-1].isdigit()):
+            return None
+        return label, " ".join(body.split())
+
+    # Labels are read before the markdown goes: once the asterisks are
+    # stripped, a bold heading and a plain sentence with a colon look alike.
+    blocks = []
+    for block in re.split(r"\n\s*\n", text or ""):
+        bold = labelled(_BOLD_LABELLED.match(block), plain_style=False)
+        loose = None if bold else labelled(_PLAIN_LABELLED.match(plain(block)),
+                                           plain_style=True)
+        blocks.append((block, bold, loose))
+    run_of_plain = sum(1 for _, _, loose in blocks if loose) >= 2
 
     out: list[tuple[str, str]] = []
-    for block in re.split(r"\n\s*\n", cleaned):
-        block = block.strip()
-        if not block:
+    for block, bold, loose in blocks:
+        if bold or (loose and run_of_plain):
+            out.append(bold or loose)
             continue
-        match = _LABELLED.match(block)
-        if match:
-            label, body = match.group(1).strip(), match.group(2).strip()
-            # A label is a heading, not the first half of a sentence: "Here's
-            # what you've told me" has no colon, but "Note: I did x" would —
-            # so require the body to be substantial and the label to be short.
-            if body and len(label.split()) <= 5:
-                out.append((label, " ".join(body.split())))
-                continue
-        out.append(("", " ".join(block.split())))
+        body = plain(block)
+        if body:
+            out.append(("", " ".join(body.split())))
     return out

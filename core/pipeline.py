@@ -36,6 +36,12 @@ def _is_screenshot_trigger(text: str) -> bool:
     return any(t in text_lower for t in SCREENSHOT_TRIGGERS)
 
 
+def _capture_for_turn() -> "tuple[str, str] | tuple[None, None]":
+    """The picture for "what's this" — see screen_tool.capture_for_mo."""
+    from tools import screen_tool
+    return screen_tool.capture_for_mo()
+
+
 def _is_end_phrase(text: str) -> bool:
     words = text.lower().strip().rstrip(".!").split()
     return len(words) <= 3 and any(p in text.lower() for p in END_PHRASES)
@@ -291,8 +297,8 @@ class PipelineWorker(QThread):
 
         try:
             if _is_screenshot_trigger(transcript):
-                from tools.screen_tool import capture_screenshot, delete_temp_screenshot
-                b64, tmp_path = capture_screenshot()
+                from tools.screen_tool import delete_temp_screenshot
+                b64, tmp_path = _capture_for_turn()
                 if b64 is None:
                     self.error.emit("Screenshot failed — couldn't capture screen")
                     return

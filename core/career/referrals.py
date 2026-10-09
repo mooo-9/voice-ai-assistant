@@ -6,18 +6,29 @@ doesn't. This finds people through a web search of public LinkedIn profiles
 referral request for each. Mo sends them himself: LinkedIn restricts accounts
 that message at machine pace, and a referral ask should come from him.
 
+People Mo already knows come first: his LinkedIn connections export
+(Connections.csv), imported once, keeps only those at a target company
+(data/career/connections.json). They need no connection note, only the ask.
+
 Stored in data/career/referrals.json:
   to_send -> sent -> replied / referred     (or skipped)
 """
+import csv
 import hashlib
+import io
 import re
+import zipfile
 from datetime import datetime
+from pathlib import Path
 
 from core.career import companies, profile, store, tracker
 
 _FILE = "referrals.json"
+_CONNECTIONS = "connections.json"
 _PROFILE_URL = re.compile(r"linkedin\.com/in/[^/?#]+")
-_NOTE_LIMIT = 300              # LinkedIn's cap on a connection note
+# LinkedIn's cap on a connection note: 200 characters on a free account (300 on
+# Premium). Past it the note is cut off or refused (career-ops checked both).
+_NOTE_LIMIT = 200
 
 _SCHEMA = {
     "type": "object",
@@ -32,11 +43,13 @@ _SCHEMA = {
 _SYSTEM = (
     "You write short, genuine networking messages for Mohamed, a Business Informatics "
     "graduate in Cairo looking for his first job. Use only facts from his profile. "
-    "'note' is a LinkedIn connection note under 280 characters: who he is, one real "
+    "'note' is a LinkedIn connection note under 190 characters: who he is, one real "
     "connection point (same university if they share it), no ask for a job yet. "
     "'message' is the follow-up after they accept, under 100 words: a specific, polite "
     "request for a referral to the named role (or advice on applying if no role is "
-    "named), offering to send his CV. No flattery, no clichés, no placeholders."
+    "named), offering to send his CV. No flattery, no clichés, no placeholders. "
+    "If the person is already one of his connections, 'note' is empty and 'message' "
+    "goes to them straight away."
 )
 
 
@@ -46,6 +59,68 @@ def all_referrals() -> dict:
 
 def _save(refs: dict) -> None:
     store.save(_FILE, refs)
+
+
+# Where LinkedIn's export lands: Connections.csv, or the zip it comes in.
+DOWNLOADS = Path.home() / "Downloads"
+
+
+def _find_export() -> "Path | None":
+    """The newest Connections.csv or LinkedIn data-export zip in Downloads."""
+    found = [p for p in DOWNLOADS.glob("*") if p.name.lower() == "connections.csv"
+             or (p.suffix.lower() == ".zip" and "linkedin" in p.name.lower())]
+    return max(found, key=lambda p: p.stat().st_mtime, default=None)
+
+
+def _read_export(path: Path) -> str:
+    if path.suffix.lower() != ".zip":
+        return path.read_text(encoding="utf-8-sig")
+    with zipfile.ZipFile(path) as z:
+        name = next((n for n in z.namelist() if n.lower().endswith("connections.csv")), None)
+        if name is None:
+            raise OSError("no Connections.csv inside it -- ask LinkedIn for the Connections export")
+        return z.read(name).decode("utf-8-sig")
+
+
+def import_connections(path: "str | None" = None) -> str:
+    """Read LinkedIn's Connections.csv export (or the zip it comes in; without
+    a path, the newest one in Downloads) and keep the people at target
+    companies. The export opens with a "Notes:" preamble, so the header row is
+    found by its columns, not its position."""
+    file = Path(path) if path else _find_export()
+    if file is None:
+        return ("No LinkedIn export in Downloads. On LinkedIn: Settings > Data privacy > "
+                "Get a copy of your data > Connections. LinkedIn emails the file; save it "
+                "to Downloads and ask again.")
+    try:
+        text = _read_export(file)
+    except (OSError, zipfile.BadZipFile) as e:
+        return f"Error: couldn't read {file.name}: {e}"
+    rows = list(csv.reader(io.StringIO(text)))
+    head = next((i for i, r in enumerate(rows)
+                 if {"first name", "company"} <= {c.strip().lower() for c in r}), None)
+    if head is None:
+        return "Error: that isn't LinkedIn's Connections.csv (no First Name / Company columns)."
+    cols = [c.strip().lower() for c in rows[head]]
+    people = {}
+    for r in rows[head + 1:]:
+        row = dict(zip(cols, (c.strip() for c in r)))
+        target = companies.match(row.get("company", ""))
+        name = f"{row.get('first name', '')} {row.get('last name', '')}".strip()
+        if not (target and name and row.get("url")):
+            continue
+        people[row["url"]] = {"name": name, "headline": row.get("position", ""),
+                              "url": row["url"], "company": target["name"],
+                              "alumni": False, "connected": True}
+    store.save(_CONNECTIONS, list(people.values()))
+    firms = sorted({p["company"] for p in people.values()})
+    return (f"{len(people)} of your connections work at target companies"
+            + (f": {', '.join(firms)}." if firms else ".")
+            + " They come first when finding referrals.")
+
+
+def connections_at(firm: str) -> list[dict]:
+    return [p for p in store.load(_CONNECTIONS, []) if p["company"] == firm]
 
 
 def search_people(company: str, university: str = "", limit: int = 10) -> list[dict]:
@@ -88,18 +163,20 @@ def draft(person: dict, role: str = "") -> "dict | None":
     out = claude.ask(
         f"His profile:\n{profile.as_text()}\n\n"
         f"Person: {person['name']}, {person['headline'] or 'works'} at {person['company']}"
-        f"{' (went to the same university)' if person.get('alumni') else ''}.\n"
+        f"{' (went to the same university)' if person.get('alumni') else ''}"
+        f"{' (already one of his connections)' if person.get('connected') else ''}.\n"
         f"Role he wants to be referred for: {role or '(none named -- ask for advice)'}",
         system=_SYSTEM, schema=_SCHEMA, effort="low", max_tokens=3000,
         model=claude.model_for(person["company"]))
     if out:
-        out["note"] = out["note"][:_NOTE_LIMIT]
+        out["note"] = "" if person.get("connected") else out["note"][:_NOTE_LIMIT]
     return out
 
 
 def find(company: "str | None" = None, count: int = 5) -> str:
-    """Find and draft up to `count` new people to ask. Without a company, the
-    targets with jobs in play come first: Big 4, then top companies."""
+    """Find and draft up to `count` new people to ask, Mo's own connections
+    at each firm before strangers. Without a company, the targets with jobs in
+    play come first: Big 4, then top companies."""
     uni = profile.load().get("answers", {}).get("university", "")
     targets = [company] if company else _companies_in_play()
     refs = all_referrals()
@@ -108,7 +185,9 @@ def find(company: "str | None" = None, count: int = 5) -> str:
     for firm in targets:
         if len(added) >= count:
             break
-        found = search_people(firm, uni) or (search_people(firm) if uni else [])
+        target = companies.match(firm)
+        found = connections_at(target["name"] if target else firm)
+        found += search_people(firm, uni) or (search_people(firm) if uni else [])
         for person in found:
             if len(added) >= count or person["url"] in known:
                 continue
@@ -149,7 +228,7 @@ def _role_at(firm: str) -> str:
 
 def to_send() -> list[dict]:
     return sorted((r for r in all_referrals().values() if r["status"] == "to_send"),
-                  key=lambda r: (not r.get("alumni"), r["found_at"]))
+                  key=lambda r: (not r.get("connected"), not r.get("alumni"), r["found_at"]))
 
 
 def mark(ref_id: str, status: str) -> str:
@@ -173,5 +252,6 @@ def list_text() -> str:
              f"{len(referred)} referred."]
     for r in pending[:8]:
         lines.append(f"- {r['id']}: {r['name']}, {r['headline'] or r['company']}"
-                     f"{' (alumni)' if r.get('alumni') else ''} -- {r['url']}")
+                     f"{' (connection)' if r.get('connected') else ' (alumni)' if r.get('alumni') else ''}"
+                     f" -- {r['url']}")
     return "\n".join(lines)

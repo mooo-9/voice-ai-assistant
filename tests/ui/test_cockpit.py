@@ -5,6 +5,9 @@ user's desktop. What matters here is the contract around the orb — that
 Chromium stays unbuilt until the cockpit is actually opened, and that state
 maps onto the orb's own vocabulary.
 """
+import json
+import time
+from datetime import date, timedelta
 from unittest.mock import MagicMock
 
 import pytest
@@ -19,6 +22,12 @@ def settings_file(tmp_path, monkeypatch):
     path.write_text("{}", encoding="utf-8")
     monkeypatch.setattr(overlay_mod, "_SETTINGS_FILE", path)
     return path
+
+
+def _seed_schedules(jobs):
+    """The scheduler's jobs, in the file conftest points at a temp dir."""
+    from core import scheduler
+    scheduler._SCHEDULES_FILE.write_text(json.dumps(jobs), encoding="utf-8")
 
 
 def _make_cockpit(qapp):
@@ -82,7 +91,7 @@ class TestStateMapping:
         from ui import tokens
         w = _make_cockpit(qapp)
         w.on_state_update(state, "", "")
-        assert f"color: {tokens.CK_ORB[orb_state]};" in w._state_chip._dot.styleSheet()
+        assert w._state_chip._mark.colour() == tokens.CK_ORB[orb_state]
         assert f"color: {tokens.CK_ORB[orb_state]};" in w._state_label.styleSheet()
         w.close()
 
@@ -101,12 +110,59 @@ class TestReadouts:
     def test_readouts_come_from_the_local_cache_never_the_network(self, tmp_path, monkeypatch):
         import ui.cockpit as mod
         cache = tmp_path / "cache.json"
-        cache.write_text(
-            '{"cards": {"calendar": {"text": "Standup at 10:00\\nthen review"}}}',
-            encoding="utf-8",
-        )
+        cache.write_text(json.dumps({"cards": {"calendar": {
+            "text": "Standup at 10:00\nthen review",
+            "date": date.today().isoformat()}}}), encoding="utf-8")
         monkeypatch.setattr(mod, "_CACHE", cache)
         assert mod._cached("calendar") == "Standup at 10:00"
+
+    def test_yesterdays_card_is_not_read_as_today(self, tmp_path, monkeypatch):
+        # The rails said "No events found for today (Monday, Sep 14)" two days
+        # running: a card was written once and never dated, so nothing could
+        # tell it was stale.
+        import ui.cockpit as mod
+        cache = tmp_path / "cache.json"
+        cache.write_text(json.dumps({"cards": {"calendar": {
+            "text": "No events found for today (Monday, Sep 14)",
+            "date": (date.today() - timedelta(days=1)).isoformat()}}}), encoding="utf-8")
+        monkeypatch.setattr(mod, "_CACHE", cache)
+        assert mod._cached("calendar") == "—"
+        assert mod._calendar_events() is None
+
+    def test_a_card_from_before_dates_were_written_is_stale(self, tmp_path, monkeypatch):
+        import ui.cockpit as mod
+        cache = tmp_path / "cache.json"
+        cache.write_text(
+            '{"cards": {"calendar": {"text": "No events found", "updated": "05:53"}}}',
+            encoding="utf-8")
+        monkeypatch.setattr(mod, "_CACHE", cache)
+        assert mod._cached("calendar") == "—"
+
+    def test_what_the_cockpit_caches_it_can_read_back(self, tmp_path, monkeypatch):
+        import ui.cockpit as mod
+        cache = tmp_path / "cache.json"
+        cache.write_text('{"cards": {"mail": {"text": "keep me"}}}', encoding="utf-8")
+        monkeypatch.setattr(mod, "_CACHE", cache)
+        mod._cache_card("calendar", "Lecture at 2")
+        assert mod._cached("calendar") == "Lecture at 2"
+        written = json.loads(cache.read_text(encoding="utf-8"))
+        assert written["cards"]["mail"]["text"] == "keep me"   # other cards kept
+        assert written["cards"]["calendar"]["date"] == date.today().isoformat()
+
+    def test_opening_the_cockpit_refreshes_the_day_in_the_background(self, qapp, tmp_path,
+                                                                     monkeypatch):
+        import ui.cockpit as mod
+        import ui.command_center as cc
+        cache = tmp_path / "cache.json"
+        cache.write_text("{}", encoding="utf-8")
+        monkeypatch.setattr(mod, "_CACHE", cache)
+        monkeypatch.setattr(cc, "_fetch_calendar", lambda: "Lecture at 2")
+        monkeypatch.setattr(cc, "_fetch_tasks", lambda: "Finish the slides")
+        w = _make_cockpit(qapp)
+        w._refresh_day().join(5)
+        assert mod._cached("calendar") == "Lecture at 2"
+        assert mod._cached("tasks") == "Finish the slides"
+        w.close()
 
     def test_a_missing_cache_reads_as_an_em_dash(self, tmp_path, monkeypatch):
         import ui.cockpit as mod
@@ -162,15 +218,64 @@ class TestStatusCard:
         assert w._status.done.text() == "—"
         w.close()
 
-    def test_next_comes_from_the_calendar_cache(self, qapp, tmp_path, monkeypatch):
+
+class TestNextAndToday:
+    """NEXT and the TODAY rail both read the cached calendar card, which is
+    what tools/calendar_tool.list_events wrote. An empty day showed "No events
+    found for today (…)" in both, and a busy one showed the card's heading as
+    NEXT rather than an event."""
+
+    DAY = ("📅 Events for today (Thursday, Sep 17):\n"
+           "- 12:00 AM — Early standup (30 min)\n"
+           "- All day — Mo's graduation prep\n"
+           "- 12:00 AM — Midnight snack (15 min)")
+
+    def _cockpit_with(self, qapp, tmp_path, monkeypatch, text):
         import ui.cockpit as mod
         cache = tmp_path / "cache.json"
-        cache.write_text('{"cards": {"calendar": {"text": "19:00  Gym"}}}', encoding="utf-8")
+        cache.write_text(json.dumps({"cards": {"calendar": {
+            "text": text, "date": date.today().isoformat()}}}), encoding="utf-8")
         monkeypatch.setattr(mod, "_CACHE", cache)
         w = _make_cockpit(qapp)
         w._refresh_readouts()
-        assert w._status.next.text() == "19:00  Gym"
+        return w
+
+    def _rail(self, w):
+        return [w._today_list.itemAt(i).widget().text()
+                for i in range(w._today_list.count())]
+
+    def test_an_empty_day_says_so_once_in_its_own_words(self, qapp, tmp_path, monkeypatch):
+        w = self._cockpit_with(qapp, tmp_path, monkeypatch,
+                               "No events found for today (Thursday, Sep 17)")
+        assert w._status.next.text() == "Free all day."
+        assert self._rail(w) == ["Nothing on today."]
         w.close()
+
+    def test_the_rail_lists_events_not_the_cards_heading(self, qapp, tmp_path, monkeypatch):
+        w = self._cockpit_with(qapp, tmp_path, monkeypatch, self.DAY)
+        assert self._rail(w) == ["12:00 AM — Early standup (30 min)",
+                                 "All day — Mo's graduation prep",
+                                 "12:00 AM — Midnight snack (15 min)"]
+        assert w._status.next.text() == "Nothing else today."     # all started
+        w.close()
+
+    def test_a_failed_fetch_is_not_an_empty_day(self, qapp, tmp_path, monkeypatch):
+        w = self._cockpit_with(qapp, tmp_path, monkeypatch,
+                               "[Calendar auth failed — check credentials.json]")
+        assert w._status.next.text() == "—"
+        assert self._rail(w) == ["—"]
+        w.close()
+
+    def test_next_is_the_first_timed_event_still_to_come(self):
+        from datetime import datetime
+        from ui.cockpit import _next_event
+        events = ["9:00 AM — Gym (1 hour)", "All day — Holiday",
+                  "2:30 PM — Lecture (2 hours)", "7:00 PM — Dinner (1 hour)"]
+        at_one = datetime(2026, 9, 17, 13, 0)
+        assert _next_event(events, at_one) == "2:30 PM — Lecture (2 hours)"
+        assert _next_event(events, datetime(2026, 9, 17, 20, 0)) == "Nothing else today."
+        assert _next_event([], at_one) == "Free all day."
+        assert _next_event(None, at_one) == "—"
 
 
 class TestMonthArrows:
@@ -307,7 +412,7 @@ class TestAttention:
         w._go_ambient()                       # what the timer would do
         assert w._attention == "ambient"
         assert w._status.graphicsEffect().opacity() == 0.0
-        from PyQt6.QtWidgets import QLabel     # saved until the Cockpit closes
+        from PyQt6.QtWidgets import QLabel     # kept until midnight
         assert "Three things today." in [
             label.text() for label in w._reading_box.findChildren(QLabel)]
         w.close()
@@ -423,20 +528,6 @@ class TestReceiptLedger:
         w.close()
 
 
-class TestSkillsReadout:
-    def test_it_counts_what_settings_left_switched_on(self, qapp, tmp_path,
-                                                     monkeypatch):
-        import json
-        import ui.overlay as overlay_mod
-        path = tmp_path / "settings.json"
-        path.write_text(json.dumps({"skills_disabled": ["gmail", "browser"]}),
-                        encoding="utf-8")
-        monkeypatch.setattr(overlay_mod, "_SETTINGS_FILE", path)
-        w = _make_cockpit(qapp)
-        assert w._skills_online() == "4 of 6"
-        w.close()
-
-
 class TestDataMoments:
     def _turn(self, tool):
         from core import progress
@@ -479,32 +570,362 @@ class TestDataMoments:
 
 
 class TestAutomationRows:
-    def test_each_row_leads_with_a_painted_file_icon(self, qapp):
-        from PyQt6.QtWidgets import QLabel
-        from ui.cockpit import _FileMark, _RailRow
-        row = _RailRow("morning routine", "MANUAL")
-        assert len(row.findChildren(_FileMark)) == 1
-        assert "▪" not in [label.text() for label in row.findChildren(QLabel)]
+    """The AUTOMATIONS panel lists what El Fager runs without being asked —
+    the scheduler's jobs and any skill put on a timer — never the skills that
+    only run on request."""
+
+    def _now(self):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        return datetime(2026, 9, 15, 20, 55, tzinfo=ZoneInfo("Africa/Cairo"))
+
+    def _jobs(self):
+        return [
+            {"id": "morning", "name": "Morning Briefing", "enabled": True,
+             "trigger": {"type": "cron", "hour": 7, "minute": 30}},
+            {"id": "evening", "name": "Evening Wind-Down", "enabled": True,
+             "trigger": {"type": "cron", "hour": 21, "minute": 30}},
+            {"id": "weekly", "name": "Weekly Report", "enabled": True,
+             "trigger": {"type": "cron", "day_of_week": "fri", "hour": 18, "minute": 0}},
+        ]
+
+    def _rows(self, schedules=(), history=(), tasks=(), skills=(), hunting=False):
+        from ui.cockpit import _automation_rows
+        return _automation_rows(list(schedules), list(history), list(tasks),
+                                list(skills), self._now(), hunting=hunting)
+
+    def _scheduled(self, *a, **kw):
+        return [r for r in self._rows(*a, **kw) if r["kind"] == "scheduled"]
+
+    def test_scheduled_jobs_come_soonest_first_with_their_next_run(self):
+        rows = self._scheduled(self._jobs())
+        assert [(r["name"], r["when"]) for r in rows] == [
+            ("Evening Wind-Down", "9:30 PM"),
+            ("Morning Briefing", "7:30 AM"),
+            ("Weekly Report", "FRI 6 PM"),
+        ]
+
+    def test_the_detail_says_how_often_and_when_it_last_ran(self):
+        history = [
+            {"job_id": "morning", "fired_at": "2026-09-07T07:30:00", "status": "ok"},
+            {"job_id": "morning", "fired_at": "2026-09-08T07:31:38", "status": "ok"},
+        ]
+        rows = {r["name"]: r for r in self._scheduled(self._jobs(), history)}
+        assert rows["Morning Briefing"]["detail"] == "Daily · last ran Sep 8"
+        assert rows["Morning Briefing"]["state"] == "ok"
+        assert rows["Weekly Report"]["detail"] == "Weekly · never ran"
+
+    def test_a_failed_last_run_says_so(self):
+        history = [{"job_id": "evening", "fired_at": "2026-09-14T21:30:00", "status": "error"}]
+        rows = {r["name"]: r for r in self._scheduled(self._jobs(), history)}
+        assert rows["Evening Wind-Down"]["state"] == "failed"
+        assert rows["Evening Wind-Down"]["detail"] == "Daily · failed Sep 14"
+
+    def test_a_paused_job_goes_last_and_says_paused(self):
+        jobs = self._jobs()
+        jobs[1]["enabled"] = False
+        rows = self._scheduled(jobs)
+        assert rows[-1]["name"] == "Evening Wind-Down"
+        assert rows[-1]["when"] == "PAUSED"
+        assert rows[-1]["state"] == "paused"
+
+    def test_skills_that_only_run_on_request_are_not_listed(self):
+        skills = [{"name": "morning routine", "scheduled_task_id": None}]
+        assert self._scheduled(skills=skills) == []
+
+    def test_a_scheduled_skill_is_listed_by_its_timer(self):
+        skills = [{"name": "gym mode", "scheduled_task_id": "t1"}]
+        tasks = [{"id": "t1", "status": "pending", "recurring_hours": 24,
+                  "run_at": "2026-09-16T06:00:00", "completed_at": "2026-09-15T06:00:04"}]
+        assert self._scheduled(tasks=tasks, skills=skills) == [{
+            "name": "Gym mode", "when": "6 AM", "detail": "Daily · last ran today",
+            "state": "ok", "run": ("skill", "gym mode"), "kind": "scheduled"}]
+
+    def test_a_job_row_knows_which_job_to_run(self):
+        rows = {r["name"]: r for r in self._scheduled(self._jobs())}
+        assert rows["Morning Briefing"]["run"] == ("job", "morning")
+
+    def test_one_off_tasks_that_are_done_are_not_automations(self):
+        tasks = [{"id": "x", "description": "say hello", "status": "done",
+                  "recurring_hours": 0.0, "run_at": None}]
+        assert self._scheduled(tasks=tasks) == []
+
+    def test_the_watching_checks_come_after_what_is_scheduled(self):
+        import core.proactive as pa
+        rows = self._rows(self._jobs())
+        assert [r["kind"] for r in rows[:3]] == ["scheduled"] * 3
+        watching = [r for r in rows if r["kind"] == "watching"]
+        assert len(watching) == len(pa.WATCHES)
+        first = watching[0]
+        assert first["state"] == "watching" and first["run"] is None
+        assert first["name"] == pa.WATCHES[0]["name"]
+        assert first["when"] == pa.WATCHES[0]["when"]
+        assert first["detail"] == pa.WATCHES[0]["detail"]
+
+    def _hunt(self, **kw):
+        [hunt] = [r for r in self._rows(**kw) if r["kind"] == "on_request"]
+        return hunt
+
+    def test_the_job_hunt_waits_for_mo_to_press_run(self):
+        hunt = self._hunt(schedules=self._jobs())
+        assert hunt["name"] == "Job hunt" and hunt["run"] == ("job_hunt", "job_hunt")
+        assert hunt["when"] == "" and "tonight at 2 AM" in hunt["detail"]
+
+    def test_armed_it_shows_tonight_and_offers_cancel_not_a_second_row(self):
+        from tools.career_tool import HUNT_JOB_ID
+        armed = {"id": HUNT_JOB_ID, "name": "Job hunt", "enabled": True,
+                 "trigger": {"type": "date", "run_date": "2026-09-16T02:00:00"},
+                 "action": {"type": "tool", "tool": "run_job_hunt", "args": {}}}
+        rows = self._rows(schedules=self._jobs() + [armed])
+        assert [r["name"] for r in rows if r["kind"] == "scheduled"].count("Job hunt") == 0
+        hunt = self._hunt(schedules=[armed])
+        assert hunt["when"] == "2 AM" and hunt["action"] == "CANCEL"
+        # A night El Fager slept through (now is Sep 15 noon) reads as not armed.
+        armed["trigger"]["run_date"] = "2026-09-14T02:00:00"
+        assert self._hunt(schedules=[armed])["when"] == ""
+
+    def test_while_it_runs_there_is_nothing_to_press(self):
+        hunt = self._hunt(schedules=[], hunting=True)
+        assert hunt["when"] == "RUNNING" and hunt["run"] is None
+
+    def test_run_arms_tonight_and_says_why_when_it_cannot(self, qapp, monkeypatch):
+        from tools import career_tool
+        import core.notifier as notifier
+        sent, pressed = [], []
+        monkeypatch.setattr(career_tool, "hunt_tonight",
+                            lambda: pressed.append(1) or "Not starting the job hunt: budget.")
+        monkeypatch.setattr(notifier, "get_notifier",
+                            lambda: type("N", (), {"send": lambda self, t: sent.append(t)})())
+        w = _make_cockpit(qapp)
+        w._run_automation({"run": ("job_hunt", "job_hunt")})
+        assert pressed == [1]
+        assert sent == ["Not starting the job hunt: budget."]
+        w.close()
+
+    def test_a_check_row_offers_no_run_button(self, qapp):
+        from ui.cockpit import _AutoRow
+        watch = {"name": "Battery low", "when": "6 AM–12 AM", "detail": "Every minute",
+                 "state": "watching", "run": None, "kind": "watching"}
+        row = _AutoRow(watch, on_run=lambda a: None)
+        row.enterEvent(None)
+        assert row._run_btn.isHidden()
         row.deleteLater()
 
-    def test_the_icon_is_ember_not_a_blank_box(self, qapp):
-        # Painted, not typed: a font without the glyph would draw nothing.
-        from PyQt6.QtCore import Qt
-        from PyQt6.QtGui import QColor, QImage
-        from ui import tokens
-        from ui.cockpit import _FileMark
-        mark = _FileMark()
-        image = QImage(mark.size(), QImage.Format.Format_ARGB32)
-        image.fill(Qt.GlobalColor.transparent)
-        mark.render(image)
-        inked = [image.pixelColor(x, y)
-                 for x in range(image.width()) for y in range(image.height())
-                 if image.pixelColor(x, y).alpha() > 200]
-        assert inked, "the icon painted nothing"
-        ember = QColor(tokens.EMBER)
-        assert all(abs(c.hue() - ember.hue()) <= 12 for c in inked
-                   if c.saturation() > 60), "the icon is not ember"
-        mark.deleteLater()
+    def test_the_panel_counts_what_is_on_and_never_says_manual(self, qapp, monkeypatch):
+        from PyQt6.QtWidgets import QLabel
+        import ui.cockpit as mod
+        rows = self._scheduled(self._jobs())
+        monkeypatch.setattr(mod.CockpitWindow, "_automations", lambda self: rows)
+        w = _make_cockpit(qapp)
+        w._refresh_rails()
+        texts = [label.text() for label in w.findChildren(QLabel)]
+        assert w._auto_count.text() == "3 ON"
+        assert "Morning Briefing" in texts and "FRI 6 PM" in texts
+        assert "MANUAL" not in texts
+        w.close()
+
+    def test_every_automation_is_listed_under_its_own_heading(self, qapp):
+        import core.proactive as pa
+        from PyQt6.QtWidgets import QLabel
+        _seed_schedules(self._jobs())
+        w = _make_cockpit(qapp)
+        w._refresh_rails()
+        rows = w._auto_list.count()
+        texts = [label.text() for label in w._auto_scroll.findChildren(QLabel)]
+        assert rows == len(w._automations()) + 3       # a heading over each group
+        assert f"SCHEDULED  ·  3" in texts
+        assert "ON REQUEST  ·  1" in texts
+        assert f"WATCHING  ·  {len(pa.WATCHES)}" in texts
+        assert "Prayer heads-up" in texts
+        w.close()
+
+    def test_the_list_scrolls_instead_of_growing_down_the_rail(self, qapp):
+        w = _make_cockpit(qapp)
+        w._refresh_readouts()
+        w._show_window()
+        for _ in range(40):
+            qapp.processEvents()
+        inner = w._auto_scroll.widget().height()
+        assert w._auto_scroll.height() < inner, "the list is not scrolling"
+        assert w._auto_scroll.verticalScrollBar().maximum() > 0
+        # The conversation still gets the taller half of the rail.
+        assert w._reading_panel.height() > w._skills_btn.parentWidget().height()
+        w.close()
+
+
+class TestSkillRows:
+    """The SKILLS tab: what El Fager can do when you ask — taught skills,
+    routines, and the apps it is connected to."""
+
+    def _rows(self, skills=None, macros=None, disabled=()):
+        from ui.cockpit import _skill_rows
+        return _skill_rows(
+            skills if skills is not None else [
+                {"name": "gym mode", "trigger_phrases": ["gym mode", "workout music"],
+                 "run_count": 3, "last_run_at": "2026-09-14T18:00:00"},
+                {"name": "deep dive", "trigger_phrases": [], "run_count": 0,
+                 "last_run_at": None}],
+            macros if macros is not None else [
+                {"name": "study_mode", "description": "Focus session — Pomodoro, lights, study music"}],
+            set(disabled))
+
+    def test_a_taught_skill_shows_what_to_say_and_when_it_last_ran(self):
+        row = self._rows()[0]
+        assert row["name"] == "Gym mode"
+        assert row["detail"] == 'Say "gym mode" · ran 3 times, last Sep 14'
+        assert row["run"] == ("skill", "gym mode")
+        assert row["kind"] == "taught"
+
+    def test_a_skill_without_a_phrase_says_how_to_run_it(self):
+        assert self._rows()[1]["detail"] == "Never ran · ask for it by name"
+
+    def test_a_routine_shows_what_it_does_and_runs_as_a_macro(self):
+        row = [r for r in self._rows() if r["kind"] == "routine"][0]
+        assert row["name"] == "Study mode"
+        assert row["detail"] == "Pomodoro, lights, study music"
+        assert row["run"] == ("macro", "study_mode")
+
+    def test_a_long_routine_description_is_cut_not_clipped(self):
+        macros = [{"name": "morning_routine", "description":
+                   "Full morning ritual — greeting, weather, prayer, calendar, emails, headlines"}]
+        row = [r for r in self._rows(macros=macros) if r["kind"] == "routine"][0]
+        assert row["detail"] == "greeting, weather, prayer, calendar, emails…"
+
+    def test_connected_apps_come_last_and_say_on_or_off(self):
+        import core.brain as brain
+        rows = [r for r in self._rows(disabled=["gmail"]) if r["kind"] == "app"]
+        assert len(rows) == len(brain.SKILL_TOOLS)
+        apps = {r["name"]: r for r in rows}
+        assert apps["Gmail"]["when"] == "OFF" and apps["Gmail"]["state"] == "paused"
+        assert apps["WhatsApp"]["when"] == "ON" and apps["WhatsApp"]["run"] is None
+
+    def test_the_groups_keep_their_order(self):
+        kinds = [r["kind"] for r in self._rows()]
+        assert kinds == ["taught"] * 2 + ["routine"] + ["app"] * 6
+
+
+class TestPanelTabs:
+    """One panel, two lists: what runs on its own, and what runs when asked."""
+
+    def _texts(self, w):
+        from PyQt6.QtWidgets import QLabel
+        return [label.text() for label in w._auto_scroll.findChildren(QLabel)]
+
+    def test_both_tabs_are_labelled_with_their_count(self, qapp):
+        w = _make_cockpit(qapp)
+        w._refresh_readouts()
+        assert w._tab_autos.text().startswith("AUTOMATIONS")
+        assert w._tab_skills.text() == f"SKILLS  {len(w._skills())}"
+        w.close()
+
+    def test_the_skills_tab_swaps_the_list(self, qapp):
+        _seed_schedules([{"id": "morning", "name": "Morning Briefing", "enabled": True,
+                          "trigger": {"type": "cron", "hour": 7, "minute": 30}}])
+        w = _make_cockpit(qapp)
+        w._refresh_readouts()
+        assert "Morning Briefing" in self._texts(w)
+        w._tab_skills.click()
+        texts = self._texts(w)
+        assert "Morning Briefing" not in texts
+        assert "TAUGHT SKILLS  ·  9" in texts and "Morning routine" in texts
+        assert w._auto_count.isHidden()      # "24 ON" belongs to the other tab
+        w._tab_autos.click()
+        assert "Morning Briefing" in self._texts(w)
+        assert not w._auto_count.isHidden()
+        w.close()
+
+    def test_the_record_keeps_a_button_of_its_own(self, qapp):
+        w = _make_cockpit(qapp)
+        assert w._skills_btn.text() == "LEDGER"
+        w.close()
+
+
+class TestRunAutomation:
+    """Hovering a row offers RUN: a job runs through the scheduler off the GUI
+    thread, a skill goes to El Fager as a request."""
+
+    _JOB = {"name": "Morning Briefing", "when": "7:30 AM", "detail": "Daily · never ran",
+            "state": "ok", "run": ("job", "morning"), "kind": "scheduled"}
+
+    def test_run_shows_only_while_the_row_is_hovered(self, qapp):
+        from ui.cockpit import _AutoRow
+        clicked = []
+        row = _AutoRow(self._JOB, on_run=clicked.append)
+        assert row._run_btn.isHidden()
+        row.enterEvent(None)
+        assert not row._run_btn.isHidden() and row._when.isHidden()
+        row._run_btn.click()
+        assert clicked == [self._JOB]
+        row.leaveEvent(None)
+        assert row._run_btn.isHidden() and not row._when.isHidden()
+        row.deleteLater()
+
+    def test_a_running_row_says_so_and_offers_no_button(self, qapp):
+        from ui.cockpit import _AutoRow
+        row = _AutoRow(self._JOB, on_run=lambda a: None, running=True)
+        row.enterEvent(None)
+        assert row._when.text() == "RUNNING"
+        assert row._run_btn.isHidden()
+        row.deleteLater()
+
+    def test_a_job_runs_once_in_the_background_then_the_row_refreshes(self, qapp, monkeypatch):
+        import threading
+        import time
+        from PyQt6.QtWidgets import QLabel
+        import core.scheduler as scheduler
+        import ui.cockpit as mod
+
+        release, calls = threading.Event(), []
+
+        class FakeScheduler:
+            def run_now(self, job_id):
+                calls.append((job_id, threading.current_thread() is threading.main_thread()))
+                release.wait(5)
+                return "done"
+
+        monkeypatch.setattr(scheduler, "get_instance", lambda: FakeScheduler())
+        job = self._JOB
+        monkeypatch.setattr(mod.CockpitWindow, "_automations", lambda self: [dict(job)])
+        w = _make_cockpit(qapp)
+        w._refresh_rails()
+
+        w._run_automation(self._JOB)
+        w._run_automation(self._JOB)          # a second click while it runs
+        assert "RUNNING" in [l.text() for l in w._auto_list.parentWidget().findChildren(QLabel)]
+
+        release.set()
+        deadline = time.time() + 5
+        while "morning" in w._running and time.time() < deadline:
+            qapp.processEvents()
+        assert calls == [("morning", False)]
+        assert "RUNNING" not in [l.text() for l in w.findChildren(QLabel) if not l.isHidden()]
+        w.close()
+
+    def test_a_routine_runs_its_macro_in_the_background(self, qapp, monkeypatch):
+        import threading
+        import time
+        import tools.macro_tool as macro_tool
+        calls = []
+        monkeypatch.setattr(macro_tool, "run_macro",
+                            lambda name: calls.append((name, threading.current_thread()
+                                                       is threading.main_thread())) or "ok")
+        w = _make_cockpit(qapp)
+        w._run_automation({"name": "Study mode", "run": ("macro", "study_mode"),
+                           "kind": "routine"})
+        deadline = time.time() + 5
+        while "study_mode" in w._running and time.time() < deadline:
+            qapp.processEvents()
+        assert calls == [("study_mode", False)]
+        w.close()
+
+    def test_a_skill_is_asked_for_through_the_conversation(self, qapp, monkeypatch):
+        w = _make_cockpit(qapp)
+        asked = []
+        monkeypatch.setattr(w, "_start_pipeline", lambda text_input=None: asked.append(text_input))
+        w._run_automation({"name": "Gym mode", "run": ("skill", "gym mode"),
+                           "kind": "scheduled"})
+        assert asked == ["Run my skill 'gym mode'."]
+        w.close()
 
 
 class TestStepMark:
@@ -519,7 +940,7 @@ class TestStepMark:
 
 class TestConversation:
     """The right rail's TRANSCRIPT panel is one scrolling conversation: every
-    exchange this session stacked in order, kept until the Cockpit closes.
+    exchange today stacked in order, kept until midnight.
     The words live only there — none of them is painted over the sphere."""
 
     def _exchange(self, w, heard, answer):
@@ -625,7 +1046,11 @@ class TestConversation:
         assert panel.index("INTERRUPTED") > panel.index("Once upon a time")
         w.close()
 
-    def test_escape_clears_the_conversation(self, qapp):
+    # Esc, closing, and the view pill all used to wipe the conversation, so
+    # nothing said earlier in the day could be read again. It is kept until
+    # midnight now.
+
+    def test_escape_keeps_todays_conversation(self, qapp):
         from PyQt6.QtCore import Qt
         from PyQt6.QtGui import QKeyEvent
         from core import staging
@@ -634,16 +1059,38 @@ class TestConversation:
         self._exchange(w, "first question", "first answer")
         w.keyPressEvent(QKeyEvent(QKeyEvent.Type.KeyPress, Qt.Key.Key_Escape,
                                   Qt.KeyboardModifier.NoModifier))
-        assert self._panel(w) == []
+        assert "first answer" in self._panel(w)
         w.close()
 
-    def test_the_next_session_starts_empty(self, qapp):
+    def test_closing_and_the_view_pill_keep_it_the_same_day(self, qapp):
+        w = _make_cockpit(qapp)
+        self._exchange(w, "morning question", "morning answer")
+        w._close()
+        self._exchange(w, "noon question", "noon answer")
+        w._open_knowledge()
+        assert len(w._exchanges) == 2
+        assert [b.toolTip() for b in w._tab_buttons] == ["morning question", "noon question"]
+        w.close()
+
+    def test_the_first_question_after_midnight_starts_empty(self, qapp):
+        from datetime import date, timedelta
         w = _make_cockpit(qapp)
         self._exchange(w, "yesterday", "old")
-        w._close()
+        w._transcript_day = date.today() - timedelta(days=1)
         self._exchange(w, "today", "new")
         assert "yesterday" not in self._panel(w)
         assert "today" in self._panel(w)
+        assert len(w._tab_buttons) == 1
+        w.close()
+
+    def test_opening_after_midnight_starts_empty(self, qapp):
+        from datetime import date, timedelta
+        w = _make_cockpit(qapp)
+        self._exchange(w, "yesterday", "old")
+        w._transcript_day = date.today() - timedelta(days=1)
+        w._start_new_day_if_needed()          # what open() does first
+        assert self._panel(w) == []
+        assert w._scrub_value.text() == "—"
         w.close()
 
     def test_the_pipeline_caption_is_not_taken_for_what_mo_said(self, qapp):
@@ -885,7 +1332,7 @@ class TestTranscriptTabs:
         assert gap < 30, f"the answer floats {gap}px below the question"
         w.close()
 
-    def test_escape_clears_the_tabs(self, qapp):
+    def test_escape_keeps_the_tabs(self, qapp):
         from PyQt6.QtCore import Qt
         from PyQt6.QtGui import QKeyEvent
         from core import staging
@@ -894,8 +1341,79 @@ class TestTranscriptTabs:
         self._exchange(w, "first question", "first answer")
         w.keyPressEvent(QKeyEvent(QKeyEvent.Type.KeyPress, Qt.Key.Key_Escape,
                                   Qt.KeyboardModifier.NoModifier))
-        assert w._tab_buttons == []
-        assert w._tabs_layout.count() == 0
+        assert len(w._tab_buttons) == 1
+        assert w._tabs_layout.count() == 1
+        w.close()
+
+
+class TestModelNamedTabs:
+    """A tab is named from the words heard, so garbled speech gave tabs like
+    "End day able". Once the answer is in, the fast model names the exchange
+    from the answer too, and the tab takes that name."""
+
+    def _answered(self, qapp, reply, heard="End day able",
+                  answer="Here's your evening shutdown: journal, then lights off."):
+        w = _make_cockpit(qapp)
+        w.brain.synthesize = MagicMock(side_effect=reply) if isinstance(reply, Exception) \
+            else MagicMock(return_value=reply)
+        w.on_state_update("listening", "", "")
+        w.on_state_update("processing", heard, "")
+        w.on_state_update("speaking", heard, answer)
+        w._naming.join(5)
+        qapp.processEvents()
+        return w
+
+    def test_the_models_name_replaces_the_one_from_the_words_heard(self, qapp):
+        w = self._answered(qapp, "Evening shutdown")
+        tab = w._tab_buttons[0]
+        assert tab.text() == "Evening shutdown"
+        assert tab.toolTip() == "End day able"         # what was heard stays
+        assert tab.width() >= tab.fontMetrics().horizontalAdvance("Evening shutdown")
+        w.close()
+
+    def test_the_model_is_shown_the_answer_not_only_the_garbled_words(self, qapp):
+        w = self._answered(qapp, "Evening shutdown")
+        prompt = w.brain.synthesize.call_args.args[0]
+        assert "End day able" in prompt and "evening shutdown" in prompt
+        w.close()
+
+    @pytest.mark.parametrize("reply", [
+        "", "   ", "A name that is far too long for a tab label",
+        "Evening shutdown\nBecause the answer was about it",
+        RuntimeError("API down"),
+    ])
+    def test_anything_but_a_short_name_keeps_the_first_one(self, qapp, reply):
+        w = self._answered(qapp, reply)
+        assert w._tab_buttons[0].text() == "End day able"
+        w.close()
+
+    def test_a_four_word_phrase_is_a_name(self, qapp):
+        # The live model's name for "What the fuck was that? I'm telling you,
+        # send a WhatsApp…" — rejected at three words, so that tab stayed
+        # "Fuck telling send".
+        w = self._answered(qapp, "Sending message to Ziad")
+        assert w._tab_buttons[0].text() == "Sending message to Ziad"
+        w.close()
+
+    def test_quotes_and_a_full_stop_are_trimmed(self, qapp):
+        w = self._answered(qapp, '"Evening shutdown."')
+        assert w._tab_buttons[0].text() == "Evening shutdown"
+        w.close()
+
+    def test_each_exchange_is_named_once(self, qapp):
+        w = self._answered(qapp, "Evening shutdown")
+        w.on_state_update("speaking", "End day able", "Here's your evening shutdown.")
+        w._naming.join(5)
+        assert w.brain.synthesize.call_count == 1
+        w.close()
+
+    def test_a_name_for_a_conversation_already_cleared_goes_nowhere(self, qapp):
+        from datetime import date, timedelta
+        w = self._answered(qapp, "Evening shutdown")
+        w._transcript_day = date.today() - timedelta(days=1)
+        w.on_state_update("processing", "weather", "")      # a new day's first
+        w._on_topic_named(0, "End day able", "Evening shutdown")   # late arrival
+        assert w._tab_buttons[0].text() == "Weather"
         w.close()
 
 
@@ -1094,20 +1612,22 @@ class TestArrows:
         assert self._focused(w) == [True]
         w.close()
 
-    def test_closing_resets_them(self, qapp):
+    def test_closing_keeps_their_place(self, qapp):
         w = _make_cockpit(qapp)
         self._exchange(w, "question", "answer")
+        before = w._scrub_value.text()
         w._close()
-        assert w._scrub_value.text() == "—"
+        assert before != "—"
+        assert w._scrub_value.text() == before
         w.close()
 
     def test_under_the_sphere_only_the_arrows_and_the_pill(self, qapp):
         # The reel has ‹ › and the view pill there and nothing else; the
-        # ledger stays on L and the SKILLS button, the keys on ?.
+        # ledger stays on L and on its button in the rail, the keys on ?.
         from PyQt6.QtWidgets import QLabel, QPushButton
         w = _make_cockpit(qapp)
         texts = [x.text() for x in w.findChildren((QLabel, QPushButton))]
-        assert "LEDGER" not in texts
+        assert w._skills_btn.parentWidget() is w._auto_scroll.parentWidget()
         assert not any("ESC CLOSE" in t for t in texts)
         w.close()
 
@@ -1121,21 +1641,6 @@ class TestArrows:
 
 
 class TestRails:
-    def test_the_skills_count_rides_on_the_skills_button(self, qapp, tmp_path, monkeypatch):
-        # The reel's panel is the list and its buttons; the count used to take
-        # a tall readout of its own under them.
-        import json
-        import ui.overlay as overlay_mod
-        from PyQt6.QtWidgets import QLabel
-        path = tmp_path / "settings.json"
-        path.write_text(json.dumps({"skills_disabled": ["gmail", "browser"]}), encoding="utf-8")
-        monkeypatch.setattr(overlay_mod, "_SETTINGS_FILE", path)
-        w = _make_cockpit(qapp)
-        w._refresh_readouts()
-        assert w._skills_btn.text() == "SKILLS  4/6"
-        assert "SKILLS ONLINE" not in [l.text() for l in w.findChildren(QLabel)]
-        w.close()
-
     def test_the_automations_panel_ends_at_its_buttons(self, qapp):
         w = _make_cockpit(qapp)
         w._refresh_readouts()
@@ -1195,6 +1700,80 @@ class TestSphereStage:
             qapp.processEvents()
         assert any(call.startswith("window.orb && window.orb.setStage(") for call in sent)
         w.close()
+
+
+class TestTheLiveMark:
+    """Mo chose a mark that moves with the state: it breathes at rest, bounces
+    like a level meter while listening, spins while working, and waves while
+    speaking. A still dot said nothing the word beside it did not."""
+
+    def _ink(self, mark):
+        """Every lit pixel of the mark, as (x, y, hue, saturation).
+
+        Qt images are freed here on the main thread: a pixmap left to the
+        collector has crashed this suite from a worker thread before."""
+        import gc
+        pixmap = mark.grab()
+        image = pixmap.toImage()
+        ink = []
+        for x in range(image.width()):
+            for y in range(image.height()):
+                colour = image.pixelColor(x, y)
+                if colour.alpha() > 40 and colour.lightness() > 40:
+                    ink.append((x, y, colour.hue(), colour.saturation()))
+        del colour, image, pixmap
+        gc.collect()
+        return ink
+
+    def test_the_mark_paints_in_every_state(self, qapp):
+        w = _make_cockpit(qapp)
+        for state in ("idle", "listening", "processing", "speaking"):
+            w.on_state_update(state, "", "")
+            assert len(self._ink(w._state_chip._mark)) > 5, f"{state} painted almost nothing"
+        w.close()
+
+    def test_each_state_has_its_own_shape(self, qapp):
+        # Bars, a ring and a dot cover the mark differently; if two states
+        # painted the same pixels, the mark would say nothing.
+        w = _make_cockpit(qapp)
+        shapes = {}
+        for state in ("idle", "listening", "processing", "speaking"):
+            w.on_state_update(state, "", "")
+            shapes[state] = {(x, y) for x, y, _, _ in self._ink(w._state_chip._mark)}
+        pairs = [(a, b) for a in shapes for b in shapes if a < b]
+        for a, b in pairs:
+            same = len(shapes[a] & shapes[b]) / max(1, len(shapes[a] | shapes[b]))
+            assert same < 0.8, f"{a} and {b} paint nearly the same mark"
+        w.close()
+
+    def test_it_moves_on_its_own(self, qapp):
+        w = _make_cockpit(qapp)
+        w.on_state_update("listening", "", "")
+        first = {(x, y) for x, y, _, _ in self._ink(w._state_chip._mark)}
+        for _ in range(12):
+            w._state_chip._mark._tick()
+        later = {(x, y) for x, y, _, _ in self._ink(w._state_chip._mark)}
+        assert first != later, "the mark is not animating"
+        w.close()
+
+    def test_it_takes_the_state_colour(self, qapp):
+        from PyQt6.QtGui import QColor
+        from ui import tokens
+        w = _make_cockpit(qapp)
+        w.on_state_update("listening", "", "")
+        want = QColor(tokens.CK_ORB["listening"]).hue()
+        hues = [hue for _, _, hue, sat in self._ink(w._state_chip._mark) if sat > 60]
+        assert hues and all(abs(hue - want) <= 12 for hue in hues)
+        w.close()
+
+    def test_a_hidden_cockpit_costs_nothing(self, qapp):
+        # The Cockpit spends most of its life hidden in the tray; a 20 fps
+        # repaint there would be pure waste.
+        w = _make_cockpit(qapp)
+        w._show_window()
+        assert w._state_chip._mark._timer.isActive()
+        w.close()
+        assert not w._state_chip._mark._timer.isActive()
 
 
 class TestSphereHearsYou:

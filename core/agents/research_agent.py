@@ -9,6 +9,10 @@ _MAX_SEARCH_RESULTS = 5
 _MAX_PAGES_TO_READ = 2
 _MAX_PAGE_CHARS = 3000  # per page, keeps Haiku prompt under token budget
 
+# Search results that are ads: a click-tracking link is not a source.
+_AD_LINKS = ("bing.com/aclick", "doubleclick.net/", "googleadservices.com/",
+             "duckduckgo.com/y.js")
+
 _STRIP_PREFIXES = [
     "research everything about",
     "research everything on",
@@ -24,6 +28,12 @@ _STRIP_PREFIXES = [
     "investigate",
     "research",          # last: "research the best X" keeps "the best X"
 ]
+
+
+def _today():
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    return datetime.now(ZoneInfo("Africa/Cairo")).date()
 
 
 class ResearchAgent(BaseAgent):
@@ -74,7 +84,11 @@ class ResearchAgent(BaseAgent):
             except ImportError:
                 from duckduckgo_search import DDGS
             with DDGS() as ddgs:
-                return list(ddgs.text(query, max_results=_MAX_SEARCH_RESULTS))
+                # Twice as many as needed: ads take slots.
+                results = list(ddgs.text(query, max_results=_MAX_SEARCH_RESULTS * 2))
+            return [r for r in results
+                    if not any(ad in r.get("href", "") for ad in _AD_LINKS)
+                    ][:_MAX_SEARCH_RESULTS]
         except Exception:
             return []
 
@@ -106,10 +120,13 @@ class ResearchAgent(BaseAgent):
             )
         context = "\n\n".join(context_parts)
 
+        # Without the date, a March article read as "this week's news" in September.
         prompt = (
             "You are El Fager's research engine. Based on the sources below, "
             "answer the query in 3-5 sentences. Be specific and cite sources as [1], [2] etc. "
-            "No emojis. Plain English only.\n\n"
+            "No emojis. Plain English only.\n"
+            f"Today is {_today():%A, %d %B %Y}. If the query asks about a time the "
+            "sources don't cover, say so plainly and give the dates they do cover.\n\n"
             f"Query: {query}\n\n"
             f"Sources:\n{context}"
         )

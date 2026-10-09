@@ -1421,8 +1421,8 @@ class OverlayWindow(QWidget):
     # ------------------------------------------------------------------ #
 
     def closeEvent(self, event):
-        staging.unsubscribe(getattr(self, "_staged_cb", None))
-        progress.unsubscribe(getattr(self, "_progress_cb", None))
+        # Only hidden, never destroyed: it stays subscribed to steps and
+        # drafts, or the next open would show neither.
         event.ignore()
         self._hide()
 

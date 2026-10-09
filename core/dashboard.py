@@ -915,7 +915,7 @@ class _Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     _POST_ROUTES = ("/api/command", "/api/send_preview", "/api/send_confirm",
-                    "/api/jobs_approve", "/api/referral_mark")
+                    "/api/jobs_approve", "/api/referral_mark", "/api/jobs_answer")
 
     def _authorized(self) -> bool:
         expected = _expected_token()
@@ -959,11 +959,22 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(200, {"ok": not result.startswith("Error"), "result": result})
             return
 
+        if self.path == "/api/jobs_answer":
+            from tools import career_tool
+            question, answer = str(payload.get("question", "")), str(payload.get("answer", ""))
+            result = career_tool.set_application_answer(question, answer)
+            self._json(200, {"ok": not result.startswith("Error"), "result": result})
+            return
+
         if self.path == "/api/jobs_approve":
             from core.career import pipeline
-            skip = [str(i) for i in payload.get("skip", [])]
+            # Only what Mo ticked is sent; the rest stays saved on the page.
+            only = [str(i) for i in payload.get("only", [])]
+            if not only:
+                self._json(400, {"ok": False, "error": "Tick at least one application."})
+                return
             try:
-                self._json(200, {"ok": True, "result": pipeline.approve(skip=skip)})
+                self._json(200, {"ok": True, "result": pipeline.approve(only=only)})
             except Exception as e:
                 self._json(500, {"ok": False, "error": str(e)[:120]})
             return

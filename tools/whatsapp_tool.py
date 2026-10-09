@@ -344,6 +344,7 @@ def confirm_whatsapp_send() -> str:
         try:
             subprocess.run(f'start "" "{uri}"', shell=True, check=False)
         except Exception as e:
+            staging.resolve("failed")       # nothing can send it now
             return (
                 f"[WhatsApp error: couldn't open WhatsApp Desktop — "
                 f"make sure it's installed from whatsapp.com/download. ({e})]"
@@ -351,6 +352,14 @@ def confirm_whatsapp_send() -> str:
 
     # Wait for WhatsApp Desktop to become the foreground window
     focused = _wait_for_whatsapp_focus(timeout=8.0)
+    if not focused:
+        # Enter goes to whatever window is in front: it used to be pressed
+        # anyway, into Mo's own app. Hand the message to him instead.
+        staging.resolve("handoff")
+        return (
+            f"WhatsApp opened with message to {name} — "
+            "press Enter to send (took longer than expected to load)."
+        )
 
     # Small extra pause so the text field settles before pressing Enter
     time.sleep(0.4)
@@ -358,18 +367,11 @@ def confirm_whatsapp_send() -> str:
     try:
         import keyboard
         keyboard.press_and_release("enter")
-        if focused:
-            # Only here did the message actually leave — anything below is a
-            # hand-off to Mo, so it clears the stage without writing a receipt.
-            staging.resolve("sent", f"whatsapp → {name} · sent")
-            _learn_name(name)
-            return f"Sent to {name}"
-        else:
-            staging.resolve("handoff")
-            return (
-                f"WhatsApp opened with message to {name} — "
-                "press Enter to send (took longer than expected to load)."
-            )
+        # Only here did the message actually leave — anything below is a
+        # hand-off to Mo, so it clears the stage without writing a receipt.
+        staging.resolve("sent", f"whatsapp → {name} · sent")
+        _learn_name(name)
+        return f"Sent to {name}"
     except Exception as e:
         staging.resolve("handoff")
         return (

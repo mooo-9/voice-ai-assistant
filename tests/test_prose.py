@@ -65,6 +65,37 @@ class TestStructureIsReadNotDiscarded:
                        "calendar and tasks.")
         assert got[0][0] == ""
 
+    @pytest.mark.parametrize("sentence", [
+        "Tomorrow in Cairo: sunny, 31 degrees.",
+        "Opened it: https://www.youtube.com/watch?v=abc",
+        "Done: the reminder is set for 7.",
+    ])
+    def test_a_short_plain_lead_in_is_prose_not_a_heading(self, sentence):
+        # Only a label the model marked as one is a heading. These came out as
+        # a "TOMORROW IN CAIRO" kicker over "sunny, 31 degrees."
+        assert sections(sentence) == [("", " ".join(plain(sentence).split()))]
+
+    def test_a_run_of_plain_labels_is_structure(self):
+        # Mo's meal plan on 09-14 was written this way, in plain spoken style.
+        got = sections("Here's a day that hits it, Mo:\n\n"
+                       "Breakfast: 4 eggs and toast.\n\n"
+                       "Lunch: chicken and rice.\n\n"
+                       "Dinner: fish and salad.")
+        assert [g[0] for g in got] == ["", "Breakfast", "Lunch", "Dinner"]
+        assert got[1][1] == "4 eggs and toast."
+
+    def test_a_clock_time_is_never_a_label(self):
+        got = sections("It's 2:30 PM in Cairo.\n\nWeather: sunny.\n\nTraffic: light.")
+        assert [g[0] for g in got] == ["", "Weather", "Traffic"]
+        assert got[0][1] == "It's 2:30 PM in Cairo."
+
+    def test_a_bold_label_with_the_colon_outside_is_still_a_label(self):
+        assert sections("**Weather**: sunny") == [("Weather", "sunny")]
+
+    def test_bold_inside_a_sentence_is_not_a_label(self):
+        got = sections("It's **really** hot today: 40 degrees.")
+        assert got == [("", "It's really hot today: 40 degrees.")]
+
     def test_it_never_returns_none(self):
         for empty in ("", "   ", "\n\n"):
             assert sections(empty) == []

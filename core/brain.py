@@ -6,6 +6,8 @@ from typing import Any
 
 import anthropic
 
+from core.telemetry import BudgetExceeded
+
 
 def _is_transient_error(exc: Exception) -> bool:
     """True for errors worth retrying: rate limits, timeouts, flaky connections."""
@@ -68,9 +70,9 @@ Mouse & keyboard: mouse_move, mouse_click, mouse_double_click, mouse_drag, mouse
 When Mo says "click on X", "type this", "press Enter", "right-click", "drag from X to Y", "scroll down", "copy" (ctrl+c), "paste" (ctrl+v) — use mouse/keyboard tools.
 Workflow: analyze_screen first to see what's on screen → get coordinates → mouse_click or type_text. Always use get_mouse_position if Mo asks where the cursor is.
 Safety: pyautogui FAILSAFE is ON — if automation goes wrong, Mo can move mouse to top-left corner to abort. NEVER use these for financial transactions without explicit confirmation.
-Windows: list_windows, get_active_window, switch_to_window, minimize_window, maximize_window, restore_window, close_window, resize_window, move_window, snap_window.
+Windows: list_windows, get_active_window, switch_to_window, minimize_window, maximize_window, restore_window, close_window, resize_window, move_window, snap_window, read_window_text.
 "switch to Chrome" / "bring up Word" → switch_to_window(title). "put Chrome on the left" → snap_window("Chrome", "left"). "side by side" → snap two windows to left/right.
-"what windows are open?" → list_windows. "what am I looking at?" → get_active_window. close_window sends polite close (app may prompt to save) — kill_process is force-kill.
+"what windows are open?" → list_windows. "what am I looking at?" → get_active_window. "what does it say?" / "read me that" → read_window_text() for the exact text. close_window sends polite close (app may prompt to save) — kill_process is force-kill.
 Browser automation: browser_is_open, browser_open, browser_navigate, browser_click, browser_type, browser_get_text, browser_get_title, browser_screenshot, browser_fill_form, browser_submit, browser_wait, browser_scroll, browser_close, browser_back, browser_get_links, browser_select.
 Browser opens visible by default so Mo can watch. Session persists — Mo only logs in once per browser session.
 Pattern: browser_open(url) → browser_type/click → browser_submit → browser_get_text. For login: browser_open → browser_type("#email", x) → browser_type("#password", y) → browser_submit.
@@ -287,7 +289,7 @@ Automation flow (propose, never impose): if run_skill's result asks you to offer
 When a proactive message mentioned a repeated ask, or Mo says "any skill suggestions?" -> skill_proposals. If Mo says yes to one -> learn_skill from it; if no -> dismiss_skill_proposal(id).
 "import my routines" / "turn my tasks into skills" / "automate my week" -> import_routines (creates + schedules skills from calendar and gym program).
 "sync my skills" (make skills available in Claude Code) -> sync_skills_to_claude. Also offer this after importing routines.
-API cost transparency: when Mo asks "what did you cost me" / "how much have you spent" -> usage_report(days) (1=today, 7=week). Answer with the real numbers, briefly.
+API cost transparency: when Mo asks "what did you cost me" / "how much have you spent" / "what has the job hunt cost" -> usage_report(days) (1=today, 7=week). Answer with the real numbers, briefly.
 Missions (multi-step background goals):
 Tools: start_mission, mission_status, cancel_mission.
 When Mo gives a BIG multi-part goal that cannot finish in one reply ("research X, compare Y, then write a summary", "plan and execute Z overnight") -> decompose it into 2-8 concrete self-contained steps and call start_mission(goal, steps). Steps run in the background, roughly one per minute; results flow into later steps; Mo is told on completion or blockage.
@@ -3233,6 +3235,23 @@ TOOLS: list[dict[str, Any]] = [
         "input_schema": {"type": "object", "properties": {}}
     },
     {
+        "name": "read_window_text",
+        "description": (
+            "Read the text a window shows, exactly, through UI Automation — works "
+            "while El Fager covers it, and only reads. Leave title empty for the "
+            "window Mo was in before he called you ('what does it say', 'read me "
+            "that'), or give part of a window's title. If it finds no text, "
+            "fall back to a screenshot."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string",
+                          "description": "Part of the window's title; empty for Mo's last window."}
+            }
+        }
+    },
+    {
         "name": "switch_to_window",
         "description": "Bring a window to the foreground by partial title match. E.g. 'Chrome', 'Word', 'Notepad'.",
         "input_schema": {
@@ -4245,6 +4264,21 @@ TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "ask_mo",
+        "description": (
+            "Ask Mo a question on WhatsApp when you can't go on without him and he isn't "
+            "talking to you right now -- in a background task or a mission step. His reply "
+            "comes back to you as a new background task with his answer. One clear question; "
+            "never for things you can decide yourself, and never while he's talking to you "
+            "(then just ask him)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"question": {"type": "string"}},
+            "required": ["question"]
+        }
+    },
+    {
         "name": "send_notification",
         "description": "Send a message to Mo's WhatsApp via CallMeBot. Use when Mo asks to be pinged, notified, or sent a WhatsApp from El Fager.",
         "input_schema": {
@@ -4371,10 +4405,10 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "job_search_agent",
         "description": (
-            "Job search agent -- finds internships and entry-level jobs in Egypt on Wuzzuf, "
-            "LinkedIn, Bayt and Forasna, and returns a ranked list with links. Use for: 'find "
-            "me jobs', 'any new internships?', 'data analyst jobs in Cairo', 'what's on "
-            "Wuzzuf'. query is the role Mo named ('data analyst internship'); omit it when he "
+            "Job search agent -- finds internships and entry-level jobs in Egypt on Wuzzuf "
+            "and LinkedIn and returns a ranked list with links. Mo dropped Bayt and Forasna. "
+            "Use for: 'find me jobs', 'any new internships?', 'data analyst jobs in Cairo', "
+            "'what's on Wuzzuf'. query is the role Mo named ('data analyst internship'); omit it when he "
             "names none and it searches all his target roles. It lists only jobs not shown "
             "before; show_all=true lists them again. It only reads postings and never "
             "applies: relay the list to Mo."
@@ -4453,21 +4487,27 @@ TOOLS: list[dict[str, Any]] = [
         "description": (
             "Read Mo's CV (a PDF or Word file path) into the profile the job applications "
             "are scored and written from, and the file they attach. Use when he says "
-            "'import my CV from ...' or 'my new CV is at ...'."
+            "'import my CV from ...' or 'my new CV is at ...'. The main CV is for AI and "
+            "data engineering roles. erp=true for his ERP CV, used for ERP roles (SAP, Odoo, "
+            "Dynamics...); analyst=true for his data analyst CV, used for data analyst/BI "
+            "roles and graduate programmes."
         ),
         "input_schema": {
             "type": "object",
-            "properties": {"path": {"type": "string"}},
+            "properties": {"path": {"type": "string"}, "erp": {"type": "boolean"},
+                           "analyst": {"type": "boolean"}},
             "required": ["path"]
         }
     },
     {
         "name": "set_application_answer",
         "description": (
-            "Save Mo's answer to a question job application forms ask. question is one of: "
-            "phone, email, linkedin_url, military_status, graduation_year, gpa, "
-            "expected_salary, availability, english_level, willing_to_relocate. Use when he "
-            "says e.g. 'my military status is exempted'."
+            "Save Mo's answer to a question job application forms ask, used by every form "
+            "from then on. question is one of phone, email, linkedin_url, military_status, "
+            "graduation_year, gpa, expected_salary, availability, english_level, "
+            "willing_to_relocate -- or, for anything else a form asked, the form's question "
+            "word for word. An application that stopped on that question is retried. Use "
+            "when he says e.g. 'my military status is exempted'."
         ),
         "input_schema": {
             "type": "object",
@@ -4479,24 +4519,30 @@ TOOLS: list[dict[str, Any]] = [
         }
     },
     {
+        "name": "retry_applications",
+        "description": (
+            "Send again the applications that stopped waiting for Mo -- a site needed him "
+            "to sign in or make an account, or a form asked something. Use when he says "
+            "'I signed in, try again' or 'retry my applications'."
+        ),
+        "input_schema": {"type": "object", "properties": {}}
+    },
+    {
         "name": "application_settings",
         "description": (
             "Show or change the job-application settings; with no input it shows them. "
             "live=true sends approved applications for real (needs his CV imported), "
-            "live=false is practice mode. nightly=true prepares a batch every night at "
-            "02:00. daily_target, min_score (0-100), linkedin_daily_cap and "
-            "big4_per_firm_per_month and referrals_per_day are numbers. Change only what "
+            "live=false is practice mode. daily_target, min_score (0-100), linkedin_daily_cap and "
+            "referrals_per_day are numbers. Change only what "
             "Mo asked to change."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "live": {"type": "boolean"},
-                "nightly": {"type": "boolean"},
                 "daily_target": {"type": "integer"},
                 "min_score": {"type": "integer"},
                 "linkedin_daily_cap": {"type": "integer"},
-                "big4_per_firm_per_month": {"type": "integer"},
                 "referrals_per_day": {"type": "integer"}
             }
         }
@@ -4520,6 +4566,57 @@ TOOLS: list[dict[str, Any]] = [
             "applications in play come first. Use for 'who can refer me at PwC'."
         ),
         "input_schema": {"type": "object", "properties": {"company": {"type": "string"}}}
+    },
+    {
+        "name": "skill_gaps",
+        "description": (
+            "What the jobs El Fager scored keep asking for that Mo's CV doesn't show, most "
+            "asked first, with how many jobs asked. Use for 'what should I learn', 'what "
+            "skills am I missing', 'why am I not a fit'."
+        ),
+        "input_schema": {"type": "object", "properties": {}}
+    },
+    {
+        "name": "evaluate_job",
+        "description": (
+            "Judge one job posting Mo found himself, from its link: whether it's still "
+            "open, its fit score against his CV, what it asks that he lacks, and whether "
+            "it's worth applying. A fit is saved and gets its letter in the next job hunt. "
+            "Use for 'is this job worth it: <link>', 'check this posting', 'check the job "
+            "I copied'. Leave url out when Mo gives none: the link he copied is used."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"url": {"type": "string"}}
+        }
+    },
+    {
+        "name": "mark_followed_up",
+        "description": (
+            "Record that Mo followed up on a sent application (email to HR, or a message "
+            "to the recruiter or his contact there). app_id comes from application_status, "
+            "which lists the follow-ups due: a week after sending, then once more a week "
+            "later. Use for 'I followed up with Valeo'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"app_id": {"type": "string"}},
+            "required": ["app_id"]
+        }
+    },
+    {
+        "name": "import_linkedin_connections",
+        "description": (
+            "Import Mo's LinkedIn connections export (Connections.csv: LinkedIn Settings > "
+            "Data privacy > Get a copy of your data > Connections). Keeps only the people "
+            "at target companies; find_referrals then asks them first, before strangers. "
+            "Use for 'import my LinkedIn connections'. Leave path out unless Mo names a "
+            "file: the newest export in Downloads (the CSV or LinkedIn's zip) is used."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"path": {"type": "string"}}
+        }
     },
     {
         "name": "referral_list",
@@ -4551,7 +4648,10 @@ TOOLS: list[dict[str, Any]] = [
             "Write an interview prep sheet for a company (and role if known): their "
             "interview stages, likely questions with answers drawn from Mo's CV, questions "
             "to ask, what to revise. Use for 'prepare me for my interview at X'. Then offer "
-            "to quiz him on the questions one at a time."
+            "a practice interview: play their interviewer and ask one question at a time, "
+            "with one follow-up when an answer is thin or strong. After each answer: what "
+            "landed, what to sharpen, and a stronger opening built only from his CV; say "
+            "so when he reuses the same story for a second question."
         ),
         "input_schema": {
             "type": "object",
@@ -4701,7 +4801,9 @@ TOOLS: list[dict[str, Any]] = [
         "description": (
             "Report El Fager's own Claude API usage and cost. Use when Mo asks "
             "'what did you cost me', 'how much have you spent', 'api usage', "
-            "'your running costs'. days=1 for today, 7 for the week."
+            "'your running costs', 'what has the job hunt cost'. Includes the "
+            "job hunt's spend for the window and since it started. "
+            "days=1 for today, 7 for the week."
         ),
         "input_schema": {
             "type": "object",
@@ -4750,6 +4852,8 @@ _CORE_NAMES: frozenset[str] = frozenset({
     "screen_agent", "browser_agent",
     "research_agent", "file_agent", "health_agent",
     "run_skill", "list_skills", "learn_skill",
+    # Background tasks and mission steps carry no keywords, and may need Mo.
+    "ask_mo",
     # A yes can arrive in a turn with no history (typed turns reset after
     # each one), so the way to act on a staged action is always on offer.
     "confirm_staged_action", "cancel_staged_action",
@@ -4781,7 +4885,7 @@ _TOOL_GROUP_NAMES: dict[str, frozenset[str]] = {
     "window": frozenset({
         "list_windows", "get_active_window", "switch_to_window", "minimize_window",
         "maximize_window", "restore_window", "close_window", "resize_window",
-        "move_window", "snap_window",
+        "move_window", "snap_window", "read_window_text",
     }),
     "browser": frozenset({
         "browser_is_open", "browser_open", "browser_navigate", "browser_click", "browser_type",
@@ -4913,6 +5017,8 @@ _TOOL_GROUP_NAMES: dict[str, frozenset[str]] = {
         "approve_applications", "application_status", "check_application_replies",
         "import_cv", "set_application_answer", "application_settings", "interview_prep",
         "graduate_programmes", "find_referrals", "referral_list", "mark_referral",
+        "import_linkedin_connections", "mark_followed_up", "evaluate_job", "skill_gaps",
+        "retry_applications",
     }),
 }
 
@@ -4927,7 +5033,8 @@ _GROUP_TRIGGERS: dict[str, list[str]] = {
                     "schedule meeting", "unread", "compose", "template",
                     "block distractions", "study mode"],
     "mouse":       ["click", "type", "press", "drag", "scroll", "move mouse", "right click", "double click", "keyboard", "hotkey", "ctrl+"],
-    "window":      ["window", "switch to", "bring up", "minimize", "maximize", "close app", "snap", "side by side", "half screen", "windows open"],
+    "window":      ["window", "switch to", "bring up", "minimize", "maximize", "close app", "snap", "side by side", "half screen", "windows open",
+                    "what does it say", "what's written", "read me that", "read that"],
     "browser":     ["browser", "open chrome", "navigate to", "go to website", "fill form", "click the button", "log in to", "scrape", "automate", "web page", "website"],
     "media":       ["play", "music", "song", "pause music", "skip", "next track", "spotify",
                     "what's playing", "volume up", "volume down"],
@@ -5024,7 +5131,8 @@ _GROUP_TRIGGERS: dict[str, list[str]] = {
     "usage": [
         "cost me", "you cost", "api usage", "api cost", "your cost",
         "how much have you spent", "token usage", "running costs",
-        "what did you spend",
+        "what did you spend", "job hunt cost", "job search cost",
+        "applications cost", "spent on the job",
     ],
     "missions": [
         "mission", "missions", "big task", "multi-step", "step by step plan",
@@ -5037,6 +5145,10 @@ _GROUP_TRIGGERS: dict[str, list[str]] = {
         "big 4", "big four", "recruiter", "military status", "expected salary",
         "graduate program", "graduate programme", "referral", "referrals",
         "briefing", "good morning", "sabah el kheir", "start my day",
+        "refer me", "linkedin", "connections", "followed up", "follow up", "follow-up",
+        "opening", "openings", "position", "positions", "posting", "career", "careers",
+        "sap", "erp", "odoo", "what should i learn", "skills am i missing",
+        "skill gap", "skill gaps", "retry", "signed in", "is the job hunt ready",
     ],
 }
 
@@ -5061,6 +5173,18 @@ SKILL_TOOLS: dict[str, frozenset[str]] = {
     "screen": frozenset({
         "analyze_screen", "ocr_screenshot", "screenshot_coords", "screen_agent",
     }),
+}
+
+# What each of those is called, and what it lets El Fager do, for the Cockpit's
+# SKILLS tab and Settings. Paired with SKILL_TOOLS by a test, so a new surface
+# has to be named here too.
+SKILL_LABELS: dict[str, tuple[str, str]] = {
+    "gmail":    ("Gmail", "Read, draft and send email"),
+    "whatsapp": ("WhatsApp", "Draft and send to your chats"),
+    "calendar": ("Calendar", "Read your days and add events"),
+    "todoist":  ("Todoist", "Tasks and to-dos"),
+    "browser":  ("Browser", "Drive Comet for you"),
+    "screen":   ("Screen", "Read what is on your screen"),
 }
 
 
@@ -5147,8 +5271,8 @@ _UNSEEN_CONFIRM = (
     "be confirmed in the same turn it was staged. Do not tell Mo it was sent. "
     "Tell him the draft is ready and ask him to say yes."
 )
-# Approving the job-application batch sends it under Mo's name. The nightly
-# job hunt runs as a background turn: it prepares the batch, only Mo approves.
+# Approving the job-application batch sends it under Mo's name. A job hunt
+# may run as a background turn: it prepares the batch, only Mo approves.
 _MO_ONLY_TOOLS = frozenset({"approve_applications"})
 _BACKGROUND_REFUSAL = (
     "NOT APPROVED — only Mo can approve applications, in his own conversation "
@@ -6234,6 +6358,9 @@ class Brain:
             elif name == "get_active_window":
                 from tools.window_tool import get_active_window
                 return get_active_window()
+            elif name == "read_window_text":
+                from tools import window_tool
+                return window_tool.read_window_text(tool_input.get("title", ""))
             elif name == "switch_to_window":
                 from tools.window_tool import switch_to_window
                 return switch_to_window(tool_input["title"])
@@ -6585,6 +6712,14 @@ class Brain:
             elif name == "delete_autonomous_task":
                 from tools.autonomous_task_tool import delete_autonomous_task as _del_at
                 return _del_at(**tool_input)
+            elif name == "ask_mo":
+                from core import ask_mo
+                question = str(tool_input.get("question", "")).strip()
+                if not question:
+                    return "Error: no question."
+                ask_mo.ask("task", question, question)
+                return ("Asked Mo on WhatsApp. His answer will come back to you as a new "
+                        "task; stop here for now.")
             elif name == "send_notification":
                 from tools.notify_tool import send_notification as _send_notif
                 return _send_notif(**tool_input)
@@ -6614,7 +6749,9 @@ class Brain:
                           "approve_applications", "application_status",
                           "check_application_replies", "import_cv", "set_application_answer",
                           "application_settings", "interview_prep", "graduate_programmes",
-                          "find_referrals", "referral_list", "mark_referral"):
+                          "find_referrals", "referral_list", "mark_referral",
+                          "import_linkedin_connections", "mark_followed_up",
+                          "evaluate_job", "skill_gaps", "retry_applications"):
                 from tools import career_tool
                 return getattr(career_tool, name)(**tool_input)
             elif name == "learn_skill":
@@ -6695,7 +6832,12 @@ class Brain:
         on_text: optional callable fired with each text delta as it streams
         from the API (used by the voice pipeline to start TTS on the first
         sentence instead of waiting for the full response). When None the
-        call is a plain blocking create() — identical to the old behaviour."""
+        call is a plain blocking create() — identical to the old behaviour.
+
+        Raises BudgetExceeded, before anything is sent, once the month's API
+        budget is spent."""
+        from core.telemetry import check_budget
+        check_budget()
         started = time.monotonic()
         if on_text is None:
             response = self.client.messages.create(**kwargs)
@@ -6743,6 +6885,16 @@ class Brain:
             "know from training may be out of date: for anything recent, current, "
             "latest or priced, trust what your tools return over your own memory."
         )
+        # Calling El Fager covers what Mo meant, so "this" has to come from
+        # the window he was in before, not the one in front now.
+        from core import focus_context
+        window = focus_context.describe()
+        if window:
+            dynamic += (
+                f"\n\nBefore Mo turned to you he was in {window}. If he says "
+                "\"this\" or \"that\" without saying what, he most likely means "
+                "that window."
+            )
         if self.memory is not None:
             facts = self.memory.format_facts_for_prompt()
             if facts:
@@ -6941,6 +7093,7 @@ class Brain:
             anthropic.APITimeoutError,
             anthropic.RateLimitError,
             anthropic.InternalServerError,
+            BudgetExceeded,     # the month's budget is spent: the local model until the 1st
         ):
             self._offline_mode = True
             from core.local_llm import local_chat

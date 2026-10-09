@@ -108,6 +108,8 @@ _TOOL_WHITELIST = {
     "read_conversation", "conversation_stats",
     # macro
     "run_macro",
+    # the job hunt Mo arms for tonight from the AUTOMATIONS panel
+    "run_job_hunt",
 }
 
 
@@ -122,6 +124,9 @@ def _dispatch_scheduled_tool(tool_name: str, args: dict) -> str:
         if tool_name == "run_macro":
             from tools.macro_tool import run_macro
             return run_macro(args.get("name", ""))
+        if tool_name == "run_job_hunt":
+            from tools.career_tool import run_job_hunt
+            return run_job_hunt()
         from tools.macro_tool import _dispatch_macro_step
         return _dispatch_macro_step(tool_name, args)
     except Exception as e:

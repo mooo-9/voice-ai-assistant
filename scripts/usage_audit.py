@@ -101,6 +101,8 @@ def main():
     print("\n-- Telemetry cost --")
     total = 0.0
     events = 0
+    job_total = 0.0
+    job_calls = 0
     for f in sorted((ROOT / "data" / "telemetry").glob("*.jsonl")):
         for line in f.read_text(encoding="utf-8").splitlines():
             try:
@@ -109,7 +111,11 @@ def main():
                 continue
             events += 1
             total += d.get("cost_usd", 0) or 0
+            if d.get("source") == "career":
+                job_calls += 1
+                job_total += d.get("cost_usd", 0) or 0
     print(f"  {events} events, ${total:.4f} total")
+    print(f"  job hunt: {job_calls} calls, ${job_total:.4f}")
 
 
 if __name__ == "__main__":

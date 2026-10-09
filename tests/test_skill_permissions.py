@@ -56,3 +56,14 @@ class TestGate:
         assert set(SKILL_TOOLS) == {
             "gmail", "whatsapp", "calendar", "todoist", "browser", "screen"}
         assert all(SKILL_TOOLS.values())
+
+
+class TestSkillLabels:
+    """SKILL_LABELS is what the Cockpit calls each connected app. A new skill
+    surface has to be named there too."""
+
+    def test_every_skill_is_named_and_described(self):
+        import core.brain as brain
+        assert set(brain.SKILL_LABELS) == set(brain.SKILL_TOOLS)
+        for name, what in brain.SKILL_LABELS.values():
+            assert name[0].isupper() and what

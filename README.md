@@ -2,7 +2,7 @@
 
 [![tests](https://github.com/mooo-9/voice-ai-assistant/actions/workflows/tests.yml/badge.svg)](https://github.com/mooo-9/voice-ai-assistant/actions/workflows/tests.yml)
 
-A personal voice assistant for Windows 11 that runs the PC for you. You call it with a custom wake phrase or a hotkey, speak naturally, and it plans the task, uses its tools and answers out loud.
+A personal voice assistant for Windows 11 that runs the PC for you. It starts when you launch it and lives in the system tray. You call it with a custom wake phrase or `Ctrl+F12`, speak naturally in English, and it plans the task, uses its tools and answers out loud.
 
 It is built in Python on the Claude API. It has 66 tools, long-term vector memory, its own speech pipeline, and an automated job-search pipeline. **2,400+ pytest tests** gate every change.
 
@@ -136,11 +136,12 @@ main.py           entry point
 
 | Action | Result |
 |---|---|
-| Wake phrase, `Ctrl+Space` or `Ctrl+F12` | Opens the overlay and starts listening |
-| `Ctrl+Shift+Space` | Opens the command center |
-| Stop speaking | It detects the silence and starts working |
-| `Escape` | Closes the overlay and cancels recording |
-| Type in the text box | Works instead of speaking |
+| Wake phrase or `Ctrl+F12` | Opens the overlay and starts listening |
+| `Ctrl+F12` again | Closes the overlay if it is already open |
+| `Ctrl+Shift+Space` or `Ctrl+Shift+F12` | Opens the command center |
+| Stop speaking | It detects the silence (~1.5s) and starts working |
+| `Escape` | Closes the overlay and cancels any recording |
+| Type in the text box | Works instead of speaking — press Enter to submit |
 
 ### Google Calendar (optional)
 

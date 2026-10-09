@@ -79,17 +79,25 @@ class TestApproveRoute:
                                               "Authorization": f"Bearer {token}"})
         return urllib.request.urlopen(req, timeout=5)
 
-    def test_approves_all_but_the_unticked(self, server):
+    def test_sends_only_the_ticked_and_keeps_the_rest(self, server):
         a, b = _ready(2)
         with patch.object(pipeline, "start_in_background", return_value=True):
-            with self._post(server, {"skip": [b]}) as r:
+            with self._post(server, {"only": [a]}) as r:
                 result = json.loads(r.read())["result"]
-        assert result.startswith("Approved 1, skipped 1.")
+        assert result.startswith("Approved 1, skipped 0, 1 saved for later.")
         assert tracker.all_apps()[a]["status"] == "approved"
+        assert tracker.all_apps()[b]["status"] == "ready"
+
+    def test_nothing_ticked_sends_nothing(self, server):
+        (a,) = _ready(1)
+        with pytest.raises(urllib.error.HTTPError) as e:
+            self._post(server, {"only": []})
+        assert e.value.code == 400
+        assert tracker.all_apps()[a]["status"] == "ready"
 
     def test_wrong_token_approves_nothing(self, server):
         (a,) = _ready(1)
         with pytest.raises(urllib.error.HTTPError) as e:
-            self._post(server, {"skip": []}, token="nope")
+            self._post(server, {"only": [a]}, token="nope")
         assert e.value.code == 401
         assert tracker.all_apps()[a]["status"] == "ready"

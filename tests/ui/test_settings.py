@@ -170,6 +170,48 @@ class TestSurface:
         from core import barge_in
         assert barge_in.enabled() is False
 
+    # Two voice settings only data/settings.json could change until now.
+
+    def _app_dir(self, settings_file, tmp_path, monkeypatch):
+        """Run from a folder whose data/settings.json is the one just written,
+        with test mode off, as the running app reads it."""
+        target = tmp_path / "cwd"
+        (target / "data").mkdir(parents=True)
+        (target / "data" / "settings.json").write_text(
+            settings_file.read_text(encoding="utf-8"), encoding="utf-8")
+        monkeypatch.chdir(target)
+        monkeypatch.delenv("EL_FAGER_TEST_MODE", raising=False)
+
+    def test_ducking_is_a_real_switch(self, qapp, settings_file, tmp_path, monkeypatch):
+        w = _window(qapp)
+        assert w._duck.isChecked()                    # on unless switched off
+        w._duck.setChecked(False)
+        assert _read(settings_file)["duck_while_listening"] is False
+        w.close()
+        self._app_dir(settings_file, tmp_path, monkeypatch)
+        from core import ducking
+        assert ducking._enabled() is False
+
+    def test_the_names_it_should_know_are_a_real_list(self, qapp, settings_file,
+                                                      tmp_path, monkeypatch):
+        w = _window(qapp)
+        w._vocabulary.setText("Estanna, Fares Sokar,  , estanna, تامر حسني")
+        w._vocabulary.editingFinished.emit()
+        assert _read(settings_file)["voice_vocabulary"] == [
+            "Estanna", "Fares Sokar", "تامر حسني"]
+        w.close()
+        self._app_dir(settings_file, tmp_path, monkeypatch)
+        from core import voice_in
+        assert voice_in._vocabulary()[:3] == ["Estanna", "Fares Sokar", "تامر حسني"]
+
+    def test_the_names_field_shows_the_saved_list(self, qapp, settings_file):
+        data = _read(settings_file)
+        data["voice_vocabulary"] = ["Tawsen", "Erzaa"]
+        settings_file.write_text(json.dumps(data), encoding="utf-8")
+        w = _window(qapp)
+        assert w._vocabulary.text() == "Tawsen, Erzaa"
+        w.close()
+
     def test_the_wake_row_shows_measured_reliability(self, qapp):
         from ui.settings import _wake_caption
         assert _wake_caption()          # never blank, even with no data yet

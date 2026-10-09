@@ -44,6 +44,16 @@ def big4() -> list[dict]:
     return [c for c in all_companies() if c["tier"] == "big4"]
 
 
+# The kinds of careers site a company can list; core.career.sources reads each.
+CAREER_SITE_KEYS = ("sites", "workday", "smartrecruiters", "amazon_jobs", "oracle_cloud",
+                    "eightfold", "jibe", "phenom", "pages")
+
+
+def with_career_sites() -> list[dict]:
+    """The companies whose own careers site the nightly search reads."""
+    return [c for c in all_companies() if any(c.get(k) for k in CAREER_SITE_KEYS)]
+
+
 def premium() -> list[dict]:
     """The Big 4 and the companies Mo picked to get the same treatment
     ("opus": true): their own career sites searched, the stronger model."""

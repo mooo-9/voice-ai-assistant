@@ -28,6 +28,59 @@ from typing import Callable
 
 _STATE_FILE = Path("data/proactive_state.json")
 
+# Every check below, in the order _run_checks calls them, written for Mo to
+# read: the Cockpit's AUTOMATIONS panel lists these as what El Fager watches
+# for. A test pairs this list against the _check_ methods, so a new check has
+# to be described here too.
+WATCHES = [
+    {"check": "_check_battery", "name": "Battery low",
+     "when": "6 AM–12 AM", "detail": "Every minute · low or critical"},
+    {"check": "_check_prayer_times", "name": "Prayer heads-up",
+     "when": "6 AM–12 AM", "detail": "Every minute · 10 minutes before each prayer"},
+    {"check": "_check_upcoming_events", "name": "Calendar heads-up",
+     "when": "6 AM–12 AM", "detail": "Every minute · before an event starts"},
+    {"check": "_check_autonomous_tasks", "name": "Queued tasks",
+     "when": "6 AM–12 AM", "detail": "Every minute · runs what you asked for later"},
+    {"check": "_check_missions", "name": "Missions",
+     "when": "6 AM–12 AM", "detail": "Every minute · one step at a time"},
+    {"check": "_check_api_budget", "name": "API budget",
+     "when": "6 AM–12 AM", "detail": "Monthly · at 80% of the API budget, and when it runs out"},
+    {"check": "_check_whatsapp_replies", "name": "WhatsApp replies",
+     "when": "All hours", "detail": "Every minute while El Fager waits on you · reads your WhatsApp answer"},
+    {"check": "_check_job_hunt", "name": "Job hunt",
+     "when": "7–11 AM", "detail": "Mornings · applications to review, programmes closing"},
+    {"check": "_check_deadlines", "name": "Deadlines",
+     "when": "7–11 AM", "detail": "Mornings · due today or tomorrow"},
+    {"check": "_check_weather", "name": "Weather alert",
+     "when": "7–11 AM", "detail": "Mornings · rain or sandstorm"},
+    {"check": "_check_overdue_invoices", "name": "Overdue invoices",
+     "when": "7–11 AM", "detail": "Mornings · unpaid past their due date"},
+    {"check": "_check_rest_day", "name": "Rest day",
+     "when": "7–11 AM", "detail": "Mornings · after 4 training days straight"},
+    {"check": "_check_oauth_tokens", "name": "Google sign-in expiry",
+     "when": "7–11 AM", "detail": "Mornings · before Gmail and Calendar stop"},
+    {"check": "_check_skill_proposals", "name": "Skill proposals",
+     "when": "7–11 AM", "detail": "Mornings · habits worth turning into a skill"},
+    {"check": "_check_journal", "name": "Journal nudge",
+     "when": "7–10 PM", "detail": "Evenings · nothing written today"},
+    {"check": "_check_expenses", "name": "Expense nudge",
+     "when": "7–10 PM", "detail": "Evenings · nothing logged today"},
+    {"check": "_check_budget_exceeded", "name": "Budget exceeded",
+     "when": "7–10 PM", "detail": "Evenings · over a category budget"},
+    {"check": "_check_transcription_quality", "name": "Transcription quality",
+     "when": "7–10 PM", "detail": "Evenings · too many garbled turns today"},
+    {"check": "_check_weekly_review", "name": "Weekly review",
+     "when": "FRI–SAT 5 PM", "detail": "Weekly · offers to look back on the week"},
+    {"check": "_check_lunch_logged", "name": "Lunch logged",
+     "when": "1 PM", "detail": "Daily · no lunch in the food log"},
+    {"check": "_check_daily_nutrition", "name": "Daily nutrition",
+     "when": "6 PM", "detail": "Daily · protein and calories so far"},
+    {"check": "_check_gym_session", "name": "Gym session",
+     "when": "8 PM", "detail": "Daily · asks how training went"},
+    {"check": "_check_weekly_gym_report", "name": "Weekly gym report",
+     "when": "MON", "detail": "Weekly · how last week's training went"},
+]
+
 
 def _fmt12(hhmm: str) -> str:
     """Convert 'HH:MM' (24h) to '12:30 PM' format."""
@@ -162,6 +215,10 @@ class ProactiveEngine:
         now  = datetime.now()
         hour = now.hour
 
+        # Day or night: whatever waits on Mo's WhatsApp answer goes on as soon
+        # as he replies. Nothing is read until a question waits.
+        self._check_whatsapp_replies()
+
         if not (6 <= hour <= 23):
             return          # sleep hours — stay quiet
 
@@ -170,6 +227,7 @@ class ProactiveEngine:
         self._check_upcoming_events()       # all waking hours
         self._check_autonomous_tasks()      # all waking hours
         self._check_missions()              # all waking hours
+        self._check_api_budget()            # all waking hours
 
         if 7 <= hour <= 11:
             self._check_job_hunt()
@@ -184,7 +242,6 @@ class ProactiveEngine:
             self._check_journal()
             self._check_expenses()
             self._check_budget_exceeded()
-            self._check_api_budget()
             self._check_transcription_quality()
 
         if now.weekday() in (4, 5) and 17 <= hour <= 20:
@@ -306,20 +363,33 @@ class ProactiveEngine:
             # import hide here for two months.
             print(f"[Proactive] event check error: {e}")
 
+    def _check_whatsapp_replies(self) -> None:
+        try:
+            from core import ask_mo
+            ask_mo.check_reply()
+        except Exception as e:
+            print(f"[Proactive] WhatsApp reply check error: {e}")
+
     def _check_job_hunt(self) -> None:
         """Morning: the job hunt is Mo's main goal, so what's waiting on him
         there comes first -- the batch to review, programme deadlines within a
-        week (to his phone too), referral notes to send."""
+        week (to his phone too), referral notes to send, follow-ups due."""
         if self._cooldown("job_hunt", 20):
             return
         try:
             from core.career import programmes, referrals, tracker
-            ready = len(tracker.with_status("ready"))
+            # New drafts only: the ones Mo left unsent stay saved, not nagged about.
+            ready = len([a for a in tracker.reached_status_since(
+                "ready", datetime.now() - timedelta(days=1)) if a["status"] == "ready"])
             soon = programmes.closing_soon()
             pending = len(referrals.to_send())
+            follow = tracker.follow_ups_due()
             parts = []
             if ready:
-                parts.append(f"{ready} job applications are ready for your review")
+                parts.append(f"{ready} new job applications are ready for your review")
+            if follow:
+                parts.append(f"{len(follow)} applications are due a follow-up: "
+                             + ", ".join(sorted({a.get('company') or '?' for a in follow})))
             for p in soon[:2]:
                 parts.append(f"{p['name']} closes in {programmes.days_left(p)} days")
             if pending:
@@ -524,12 +594,16 @@ class ProactiveEngine:
                     refreshed = mgr.last_finished()
                     if refreshed and refreshed["id"] == active["id"] \
                             and refreshed["status"] == "blocked":
-                        self._deliver(
-                            f"Mo, mission '{active['goal']}' is stuck at step "
-                            f"{step['n']} ({step['description'][:60]}). "
-                            f"I tried twice. Tell me how to proceed.",
-                            remote=True,
-                        )
+                        stuck = (f"Mission '{active['goal']}' is stuck at step "
+                                 f"{step['n']} ({step['description'][:60]}): {str(e)[:120]}. "
+                                 "I tried twice.")
+                        self._deliver(f"Mo, {stuck} Tell me how to proceed.")
+                        try:      # asked on WhatsApp too; his reply resumes it
+                            from core import ask_mo
+                            ask_mo.ask("mission", active["id"], f"{stuck} Reply with how to "
+                                       "go on, or 'stop'.")
+                        except Exception:
+                            pass
                     return
             if mgr.get_active() is None:
                 finished = mgr.last_finished()
@@ -636,34 +710,33 @@ class ProactiveEngine:
         except Exception:
             pass
 
-    _DEFAULT_API_BUDGET_USD = 5.0
-
     def _check_api_budget(self) -> None:
-        """Evening warning when today's Claude API spend exceeds the budget.
-        Budget: data/settings.json 'api_daily_budget_usd' (0 disables)."""
-        if self._cooldown("api_budget", 20):
-            return
+        """Says so once a month at 80% of the monthly API budget, and once when
+        it is used up and the brain has moved to the local model until the 1st.
+        Budget: data/settings.json 'api_monthly_budget_usd' (0 disables)."""
         try:
-            budget = self._DEFAULT_API_BUDGET_USD
-            settings_path = Path("data/settings.json")
-            if settings_path.exists():
-                try:
-                    settings = json.loads(settings_path.read_text(encoding="utf-8"))
-                    budget = float(settings.get("api_daily_budget_usd",
-                                                self._DEFAULT_API_BUDGET_USD))
-                except Exception:
-                    pass
+            from core.telemetry import cost_this_month, monthly_budget
+            budget = monthly_budget()
             if budget <= 0:
                 return
-            from core.telemetry import cost_today
-            spent = cost_today()
-            if spent > budget:
-                self._deliver(
-                    f"Mo, heads up -- I've cost about ${spent:.2f} in API calls "
-                    f"today, over your ${budget:.2f} daily budget."
-                )
+            spent = cost_this_month()
+            if spent >= budget:
+                key = "api_budget_used_up"
+                text = (f"Mo, this month's ${budget:.2f} API budget is used up "
+                        f"(${spent:.2f}). Until the 1st I'm on the local model: "
+                        "I can talk, but I can't use my tools.")
+            elif spent >= budget * 0.8:
+                key = "api_budget_warned"
+                text = (f"Mo, heads up -- I've used ${spent:.2f} of this month's "
+                        f"${budget:.2f} API budget.")
             else:
-                self._reset_cooldown("api_budget")
+                return
+            month = datetime.now().strftime("%Y-%m")
+            if self._state.get(key) == month:
+                return
+            self._state[key] = month
+            self._save_state()
+            self._deliver(text, remote=key == "api_budget_used_up")
         except Exception:
             pass
 
@@ -688,7 +761,8 @@ class ProactiveEngine:
                 self._deliver(
                     "Mo, Google login tokens are about to expire: "
                     + ", ".join(stale)
-                    + ". Say 'check my email' or 'check my calendar' to re-auth before they break."
+                    + ". Say 'check my email' or 'check my calendar' to re-auth before they break.",
+                    remote=True,
                 )
             else:
                 self._reset_cooldown("oauth_tokens")

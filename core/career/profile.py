@@ -4,9 +4,25 @@ application forms keep asking for.
 Nothing here is invented: answers Mo hasn't given stay empty, and the review
 page lists them so he can fill them in by voice ("my expected salary is ...").
 """
+import re
 from pathlib import Path
 
 from core.career import store
+
+# Mo keeps three CVs: the main one for AI and data engineering, an analyst one
+# for data analyst/BI roles and graduate programmes, and an ERP one. A job is
+# scored, written and sent from the CV its title calls for, once that CV is
+# imported; everything else from the main one. A title naming AI or data
+# engineering work gets the main CV even when it also says "analyst".
+_ERP_RE = re.compile(r"\b(erp|sap|odoo|netsuite|d365|dynamics 365"
+                     r"|oracle (?:ebs|fusion|financials|apps))\b", re.IGNORECASE)
+_MAIN_RE = re.compile(r"\b(ai|artificial intelligence|machine learning|ml|llm|nlp|generative"
+                      r"|data engineer\w*|etl|big data|data platform|analytics engineer\w*"
+                      r"|data scien\w*)\b", re.IGNORECASE)
+_ANALYST_RE = re.compile(r"\b(data analy\w*|analytics|business intelligence|bi|power bi"
+                         r"|graduate program\w*|graduate scheme)\b", re.IGNORECASE)
+_CV_FIELDS = ("name", "headline", "education", "skills", "experience",
+              "projects", "certifications", "languages")
 
 # The questions Egyptian application forms ask most. Empty until Mo answers.
 ANSWER_KEYS = {
@@ -60,9 +76,35 @@ def has_cv() -> bool:
     return bool(p.get("cv_path")) and Path(p["cv_path"]).exists()
 
 
-def import_cv(path: str) -> str:
-    """Read Mo's CV (PDF or Word) into the profile. Answers the CV holds
-    (phone, GPA...) fill empty answers; ones Mo gave by hand are kept."""
+def is_erp(job: dict) -> bool:
+    return bool(_ERP_RE.search(job.get("title") or ""))
+
+
+def is_analyst(job: dict) -> bool:
+    title = job.get("title") or ""
+    return bool(_ANALYST_RE.search(title)) and not _MAIN_RE.search(title) and not is_erp(job)
+
+
+def for_job(profile: dict, job: dict) -> dict:
+    """The profile an application to `job` is written and sent from: the ERP
+    CV's for an ERP role once it's imported, the main one otherwise. A CV
+    tailored to this one job (made with Mo in Claude Code) is the file sent."""
+    erp = profile.get("erp") or {}
+    analyst = profile.get("analyst") or {}
+    if erp.get("cv_path") and is_erp(job):
+        chosen = {**profile, **erp}
+    elif analyst.get("cv_path") and is_analyst(job):
+        chosen = {**profile, **analyst}
+    else:
+        chosen = profile
+    return {**chosen, "cv_path": job["cv_path"]} if job.get("cv_path") else chosen
+
+
+def import_cv(path: str, erp: bool = False, analyst: bool = False) -> str:
+    """Read Mo's CV (PDF or Word) into the profile -- the ERP one when `erp`,
+    the analyst one (data analyst/BI roles, graduate programmes) when `analyst`.
+    Answers the CV holds (phone, GPA...) fill empty answers; ones Mo gave by
+    hand are kept."""
     cv = Path(path).expanduser()
     if not cv.exists():
         return f"Error: no file at {cv}"
@@ -86,16 +128,42 @@ def import_cv(path: str) -> str:
     for key in ("email", "phone", "linkedin_url", "graduation_year", "gpa"):
         if fields.get(key) and not answers.get(key):
             answers[key] = fields[key]
-    profile.update({k: v for k, v in fields.items() if k in
-                    ("name", "headline", "education", "skills", "experience",
-                     "projects", "certifications", "languages")})
-    profile.update({"cv_path": str(cv), "cv_text": text, "answers": answers})
+    cv_part = {k: v for k, v in fields.items() if k in _CV_FIELDS}
+    cv_part.update({"cv_path": str(cv), "cv_text": text})
+    if erp:
+        profile["erp"] = cv_part
+    elif analyst:
+        profile["analyst"] = cv_part
+    else:
+        profile.update(cv_part)
+    profile["answers"] = answers
     save(profile)
 
     missing = missing_answers(profile)
     note = f" Still missing: {', '.join(missing)}." if missing else ""
-    return (f"CV imported: {profile['name'] or cv.name} -- {len(profile['skills'])} skills, "
-            f"{len(profile['experience'])} experience entries.{note}")
+    ats = ats_problems(text)
+    if ats:
+        note += " Hiring systems may misread it: " + "; ".join(ats) + "."
+    which = ("ERP CV (for ERP roles)" if erp
+             else "Analyst CV (for data analyst/BI roles and graduate programmes)" if analyst
+             else "CV")
+    return (f"{which} imported: {cv_part['name'] or cv.name} -- {len(cv_part['skills'])} "
+            f"skills, {len(cv_part['experience'])} experience entries.{note}")
+
+
+# The headings hiring systems split a CV by (career-ops' ATS check).
+_ATS_HEADINGS = {"Experience": r"experience|employment|internships?",
+                 "Education": r"education", "Skills": r"skills"}
+
+
+def ats_problems(text: str) -> list[str]:
+    """What an applicant-tracking system reading the CV's text would miss."""
+    problems = [f"no '{name}' heading" for name, words in _ATS_HEADINGS.items()
+                if not re.search(rf"^\W*[\w &]*\b(?:{words})\b[\w &]*:?\s*$", text,
+                                 re.IGNORECASE | re.MULTILINE)]
+    if not re.search(r"[\w.+-]+@[\w-]+\.[\w.]+", text):
+        problems.append("no email address in its text")
+    return problems
 
 
 def _cv_text(cv: Path) -> str:
@@ -113,13 +181,19 @@ def _cv_text(cv: Path) -> str:
 
 
 def set_answer(key: str, answer: str) -> str:
-    key = key.strip().lower().replace(" ", "_")
-    if key not in ANSWER_KEYS:
-        return f"Error: unknown question '{key}'. Known: {', '.join(ANSWER_KEYS)}."
+    """One of the usual questions, or any other a form asked (kept word for
+    word in "extra_answers" and given to every form from then on)."""
+    known = key.strip().lower().replace(" ", "_")
     profile = load()
-    profile.setdefault("answers", {})[key] = answer.strip()
+    if known in ANSWER_KEYS:
+        profile.setdefault("answers", {})[known] = answer.strip()
+        save(profile)
+        return f"Saved: {ANSWER_KEYS[known]} = {answer.strip()}"
+    if not key.strip() or not answer.strip():
+        return "Error: give both the question and the answer."
+    profile.setdefault("extra_answers", {})[key.strip()] = answer.strip()
     save(profile)
-    return f"Saved: {ANSWER_KEYS[key]} = {answer.strip()}"
+    return f"Saved for application forms: {key.strip()} = {answer.strip()}"
 
 
 def missing_answers(profile: "dict | None" = None) -> list[str]:

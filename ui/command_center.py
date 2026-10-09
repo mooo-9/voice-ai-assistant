@@ -1217,9 +1217,12 @@ class CommandCenterWindow(QWidget):
             return
         clean = text.strip() or "Nothing here."
         self._set_card_text(card_id, clean)
-        now = datetime.now().strftime("%H:%M")
-        self._cards[card_id].meta.setText(f"AS OF {now}")
-        self._save_cache_entry(card_id, {"text": clean, "updated": now})
+        now = datetime.now()
+        self._cards[card_id].meta.setText(f"AS OF {now:%H:%M}")
+        # Dated, so a surface reading this cache can tell a card about today
+        # from one written days ago.
+        self._save_cache_entry(card_id, {"text": clean, "updated": f"{now:%H:%M}",
+                                         "date": now.date().isoformat()})
         if card_id == "health":
             self._update_health_visuals()
         self._maybe_write_briefing()

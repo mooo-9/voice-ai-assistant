@@ -16,7 +16,7 @@ Two things this surface must never do, and the code keeps both:
 Cockpit palette — this is a cockpit-family surface, not a Dawn one.
 """
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QEvent, Qt
 from PyQt6.QtWidgets import (
     QApplication,
     QHBoxLayout,
@@ -142,14 +142,41 @@ class TrustLedgerWindow(QWidget):
         self._filter = None
         self._build_ui()
         self.refresh()
+        if parent is not None:
+            # Keep covering the stage: it is a child of the cockpit rather
+            # than a widget in its layout, so nothing else would resize it.
+            parent.installEventFilter(self)
+
+    def eventFilter(self, watched, event):
+        if watched is self.parentWidget() and event.type() == QEvent.Type.Resize:
+            self.setGeometry(watched.rect())
+        return super().eventFilter(watched, event)
 
     def _build_ui(self):
-        self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
+        # A panel over the cockpit, the way the ? map is: the stage dimmed
+        # behind, the record on a card of its own. It used to carry the
+        # frameless flag while parented to the cockpit — which does not make a
+        # window — so it painted no background at all and the sphere read
+        # straight through every line of it.
         self.setWindowTitle("El Fager — Trust Ledger")
-        self.setStyleSheet(f"background: {tokens.CK_PANEL};")
-        self.resize(860, 760)
+        self.setObjectName("scrim")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setStyleSheet(f"#scrim {{ background: {tokens.rgba(tokens.CK_VOID, 0.93)}; }}")
+        self.resize(940, 820)
 
-        col = QVBoxLayout(self)
+        backdrop = QVBoxLayout(self)
+        backdrop.setContentsMargins(40, 40, 40, 40)
+        self._card = QWidget()
+        self._card.setObjectName("card")
+        self._card.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self._card.setStyleSheet(
+            f"#card {{ background: {tokens.CK_PANEL};"
+            f" border: 1px solid {tokens.CK_HAIRLINE};"
+            f" border-radius: {tokens.R3}px; }}"
+        )
+        backdrop.addWidget(self._card, 0, Qt.AlignmentFlag.AlignCenter)
+
+        col = QVBoxLayout(self._card)
         col.setContentsMargins(32, 26, 32, 22)
         col.setSpacing(16)
 
@@ -217,7 +244,8 @@ class TrustLedgerWindow(QWidget):
         self._rows_host = QWidget()
         self._rows_host.setStyleSheet("background: transparent;")
         self._rows = QVBoxLayout(self._rows_host)
-        self._rows.setContentsMargins(0, 0, 0, 0)
+        # Room for the scrollbar: a long record put it over the revoke button.
+        self._rows.setContentsMargins(0, 0, 14, 0)
         self._rows.setSpacing(0)
         self._rows.addStretch()
         scroll.setWidget(self._rows_host)
@@ -231,6 +259,15 @@ class TrustLedgerWindow(QWidget):
         law.setWordWrap(True)
         law.setStyleSheet(_mono(10, tokens.CK_TEXT_FAINT, 1.2))
         col.addWidget(law)
+
+    def resizeEvent(self, event):
+        """The card takes the stage it is given, up to its own size. Left to
+        its layout it asked only for what its rows needed, which on a long
+        record meant four entries and a scrollbar for the other fifty-six."""
+        super().resizeEvent(event)
+        # 40px of backdrop all round, so the card gets what is left of both.
+        self._card.setFixedSize(min(860, max(320, self.width() - 80)),
+                                min(760, max(280, self.height() - 80)))
 
     def _set_filter(self, key: "str | None"):
         self._filter = key
@@ -311,14 +348,19 @@ class TrustLedgerWindow(QWidget):
 
     def open(self):
         self.refresh()
-        screen = QApplication.primaryScreen()
-        if screen is not None:
-            area = screen.availableGeometry()
-            self.move(area.center().x() - self.width() // 2,
-                      area.center().y() - self.height() // 2)
+        parent = self.parentWidget()
+        if parent is not None:
+            self.setGeometry(parent.rect())
+        else:
+            screen = QApplication.primaryScreen()
+            if screen is not None:
+                area = screen.availableGeometry()
+                self.move(area.center().x() - self.width() // 2,
+                          area.center().y() - self.height() // 2)
         self.show()
         self.raise_()
         self.activateWindow()
+        self.setFocus()
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Escape:

@@ -24,6 +24,17 @@ def _model_used(fn):
     return client.return_value.messages.create.call_args.kwargs["model"]
 
 
+def _batch_models_used(fn):
+    """The models of the requests fn sent as a Message Batch."""
+    with patch.object(claude, "_get_client") as client:
+        batches = client.return_value.messages.batches
+        batches.create.return_value = MagicMock(id="b", processing_status="ended")
+        batches.results.return_value = []
+        fn()
+    return {r["params"]["model"] for c in batches.create.call_args_list
+            for r in c.kwargs["requests"]}
+
+
 class TestModels:
     @pytest.mark.parametrize("company,model", [
         ("PwC Middle East", "claude-opus-5"), ("KPMG Hazem Hassan", "claude-opus-5"),
@@ -33,10 +44,15 @@ class TestModels:
         ("Nestlé Egypt", "claude-opus-5"),
         ("Fawry", "claude-sonnet-5"), ("Vodafone Egypt", "claude-sonnet-5"),
         ("Some Startup", "claude-sonnet-5"), ("", "claude-sonnet-5")])
-    def test_scoring_and_letters(self, company, model):
+    def test_scoring(self, company, model):
         job = {"title": "Analyst", "company": company}
-        assert _model_used(lambda: scorer.score(job, "profile")) == model
-        assert _model_used(lambda: tailor.draft(job, "profile", "email")) == model
+        assert _batch_models_used(lambda: scorer.score_all([job], "profile")) == {model}
+
+    @pytest.mark.parametrize("tier,model", [
+        ("big4", "claude-opus-5"), ("top", "claude-sonnet-5"), ("", "claude-sonnet-5")])
+    def test_only_the_big4_get_their_letters_from_opus(self, tier, model):
+        job = {"title": "Analyst", "company": "IBM Egypt", "tier": tier, "channel": "email"}
+        assert _batch_models_used(lambda: tailor.draft_all([job], "profile")) == {model}
 
     def test_interview_prep_for_a_big4_firm_uses_opus(self):
         with patch("core.agents.research_agent.ResearchAgent.run", return_value=""):
@@ -57,7 +73,7 @@ class TestDefaults:
 class TestNothingSpentBeforeTheCv:
     def test_no_jobs_are_scored_or_drafted(self):
         with patch("core.career.sources.gather") as gather, \
-             patch.object(scorer, "score") as score, \
+             patch.object(scorer, "score_all") as score, \
              patch.object(pipeline, "_nightly_extras", return_value="") as extras, \
              patch.object(pipeline, "_notify"):
             out = pipeline.prepare_batch()

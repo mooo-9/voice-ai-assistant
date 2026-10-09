@@ -79,6 +79,25 @@ def test_run_done_immediately():
     mock_browser.close.assert_called_once()
 
 
+def test_run_records_spend_under_the_callers_label():
+    labels = []
+    for kwargs in ({}, {"telemetry_source": "career"}):
+        agent = BrowserAgent()
+        mock_context = MagicMock()
+        mock_context.new_page.return_value.screenshot.return_value = b"fake_png"
+        with patch.object(agent, "_get_action", return_value=_done()), \
+             patch("time.sleep"), \
+             patch("core.telemetry.instrument_client") as instrument, \
+             patch("playwright.sync_api.sync_playwright") as mock_pw, \
+             patch("tools.comet_tool.automation_context",
+                   return_value=(MagicMock(), mock_context, True)):
+            mock_pw.return_value.__enter__ = MagicMock(return_value=MagicMock())
+            mock_pw.return_value.__exit__ = MagicMock(return_value=False)
+            agent.run("find something", **kwargs)
+        labels.append(instrument.call_args.args[1])
+    assert labels == ["browser_agent", "career"]
+
+
 def test_run_requests_login_when_no_vault_creds():
     agent = BrowserAgent()
     need_login = {"status": "need_login", "message": "google", "action": {"type": "none"}}
@@ -242,3 +261,62 @@ def test_a_task_that_asks_closes_its_own_tab_but_never_his_browser():
 
     mock_page.close.assert_called_once()
     mock_browser.close.assert_not_called()
+
+
+def test_a_step_can_be_decided_by_the_callers_ask_fn():
+    """The job hunt decides each form step through Claude Code, which wraps
+    its JSON in a ```json fence."""
+    agent = BrowserAgent()
+    seen = []
+    agent._ask_fn = lambda system, prompt, shot: seen.append((prompt, shot)) or \
+        '```json\n{"status": "done", "message": "SUBMITTED", "action": {"type": "none"}}\n```'
+    client = MagicMock()
+    out = agent._get_action(client, "apply", "PNG", "https://x", [], fields="#fn | text | \"Name\"")
+    assert out["message"] == "SUBMITTED"
+    assert '#fn | text | "Name"' in seen[0][0] and seen[0][1] == "PNG"
+    client.messages.create.assert_not_called()
+
+
+def test_it_follows_the_tab_an_apply_button_opens():
+    """LinkedIn's Apply opens the employer's form in a new tab."""
+    agent = BrowserAgent()
+    first, employer = MagicMock(), MagicMock()
+    for pg in (first, employer):
+        pg.screenshot.return_value = b"png"
+        pg.is_closed.return_value = False
+    first.url, employer.url = "https://linkedin.com/jobs/view/1", "https://careers.valeo.com/apply"
+    context = MagicMock()
+    context.new_page.return_value = first
+    urls = []
+
+    def act(client, task, shot, url, history, **kw):
+        urls.append(url)
+        if len(urls) == 1:
+            context.on.call_args.args[1](employer)   # the new tab opens
+            return _continue({"type": "click", "selector": "text=Apply"})
+        return _done("SUBMITTED")
+
+    with patch.object(agent, "_get_action", side_effect=act), patch("time.sleep"), \
+         patch("playwright.sync_api.sync_playwright") as mock_pw, \
+         patch("tools.comet_tool.automation_context", return_value=(MagicMock(), context, False)):
+        mock_pw.return_value.__enter__ = MagicMock(return_value=MagicMock())
+        mock_pw.return_value.__exit__ = MagicMock(return_value=False)
+        assert agent.run("apply", close_tab=True) == "SUBMITTED"
+    assert urls == ["https://linkedin.com/jobs/view/1", "https://careers.valeo.com/apply"]
+    first.close.assert_called_once()
+    employer.close.assert_called_once()
+
+
+def test_fill_many_fills_each_field_and_names_the_ones_it_couldnt():
+    agent = BrowserAgent()
+    page = MagicMock()
+    good, bad = MagicMock(), MagicMock()
+    good.evaluate.return_value = "INPUT"
+    bad.evaluate.side_effect = Exception("not found")
+    page.locator.side_effect = lambda sel: MagicMock(first=good if sel == "#fn" else bad)
+    try:
+        agent._execute(page, {"type": "fill_many", "fields": [
+            {"selector": "#nope", "text": "x"}, {"selector": "#fn", "text": "Mohamed"}]})
+    except ValueError as e:
+        assert "#nope" in str(e)
+    good.fill.assert_called_once_with("Mohamed")

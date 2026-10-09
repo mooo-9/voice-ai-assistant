@@ -6,8 +6,6 @@ Unlike capture_screenshot (which does OCR text extraction only), this tool
 understands visual layout, graphs, icons, images, and UI structure.
 """
 
-import base64
-import io
 import os
 
 # Load .env in case this module is imported before main.py runs dotenv
@@ -19,28 +17,23 @@ except ImportError:
 
 
 def analyze_screen(question: str = "What do you see on screen?") -> str:
-    """Capture current screen and use Claude vision to answer a question about it."""
+    """Use Claude vision to answer a question about what Mo is looking at.
+
+    The picture is the window Mo was in before El Fager came up, not the whole
+    monitor: that had the Cockpit on top of whatever he meant."""
     try:
-        import mss
-        from PIL import Image
         import anthropic
+
+        from tools import screen_tool
 
         api_key = os.environ.get("ANTHROPIC_API_KEY", "")
         if not api_key:
             return "[Screen analysis failed: ANTHROPIC_API_KEY not set in .env]"
 
-        with mss.mss() as sct:
-            monitor = sct.monitors[1]
-            shot = sct.grab(monitor)
-            img = Image.frombytes("RGB", shot.size, shot.rgb)
-
-        w, h = img.size
-        if w > 1280:
-            img = img.resize((1280, int(h * 1280 / w)), Image.LANCZOS)
-
-        buf = io.BytesIO()
-        img.save(buf, format="PNG")
-        img_b64 = base64.b64encode(buf.getvalue()).decode()
+        img_b64, path = screen_tool.capture_for_mo()
+        if not img_b64:
+            return "[Screen analysis failed: couldn't capture the screen]"
+        screen_tool.delete_temp_screenshot(path)
 
         client = anthropic.Anthropic(api_key=api_key)
         resp = client.messages.create(

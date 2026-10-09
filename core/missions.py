@@ -91,6 +91,35 @@ class MissionManager:
     def cancel(self, mission_id: str) -> bool:
         return self._finish(mission_id, "cancelled")
 
+    def resume(self, mission_id: str, note: str) -> bool:
+        """A stuck mission goes on the way Mo said: its failed step runs again
+        with his words. Not while another mission runs: one at a time."""
+        if self.get_active():
+            return False
+        missions = self._load()
+        for m in missions:
+            if m["id"] == mission_id and m["status"] == "blocked":
+                for s in m["steps"]:
+                    if s["status"] == "failed":
+                        s["status"], s["attempts"] = "pending", 0
+                        s["description"] += f" (Mo said: {note})"
+                m["status"] = "in_progress"
+                m["updated_at"] = datetime.now().isoformat()
+                self._save(missions)
+                return True
+        return False
+
+    def stop(self, mission_id: str) -> bool:
+        """Cancel a mission, stuck or running."""
+        missions = self._load()
+        for m in missions:
+            if m["id"] == mission_id and m["status"] in ("blocked", "in_progress"):
+                m["status"] = "cancelled"
+                m["updated_at"] = datetime.now().isoformat()
+                self._save(missions)
+                return True
+        return False
+
     # ── Step execution bookkeeping ─────────────────────────────────────────
 
     def next_step(self) -> dict | None:
